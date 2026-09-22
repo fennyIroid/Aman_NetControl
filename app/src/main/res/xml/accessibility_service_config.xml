@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Scoped as narrowly as the protections allow.
+
+    Only window state and content changes are requested, and retrieving window content is required
+    because reading the node tree is the entire mechanism behind the Shorts, Status and AI
+    protections. Scroll events are requested for video blurring: the covers follow a page by how
+    far the app says it scrolled, which the capture cannot measure through the covers themselves.
+    Only the numbers on a scroll event are read. The notification timeout is zero because Android
+    coalesces events inside the timeout and keeps only the last, and a scroll report dropped is
+    distance lost; the service throttles its own tree walks in code instead. canRetrieveWindowContent is the flag that makes this service policy-sensitive on
+    Google Play, and the app declares an accessibility purpose for it accordingly.
+
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewScrolled"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds|flagIncludeNotImportantViews"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="0"
+    android:settingsActivity="com.example.childsafetyimpl.MainActivity" />

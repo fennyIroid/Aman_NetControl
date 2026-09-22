@@ -1,0 +1,6 @@
+<resources>
+    <!-- Mirrors of the Compose palette, needed by the window theme before Compose starts. -->
+    <color name="canvas">#F4F6FC</color>
+    <color name="indigo">#2E5BFF</color>
+    <color name="indigo_deep">#1B3BB8</color>
+</resources>

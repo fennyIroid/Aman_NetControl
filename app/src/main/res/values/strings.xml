@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">Child safety App</string>
+
+    <string name="accessibility_service_label">Child safety screen protection</string>
+    <string name="accessibility_service_description">Lets Child safety App recognise which screen is open inside another app, so short-form feeds, Status and Stories screens, and AI conversations can be recognised and closed. It reads screen structure only while a watched app is open, and never stores what it reads.</string>
+
+    <string name="notification_listener_label">Child safety message signals</string>
+    <string name="device_admin_label">Child safety device protection</string>
+    <string name="device_admin_description">Requires a parent to turn protection off before Child safety App can be removed from this device.</string>
+</resources>

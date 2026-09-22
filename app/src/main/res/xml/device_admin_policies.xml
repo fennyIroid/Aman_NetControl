@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Deliberately minimal.
+
+    Only the policies the prototype actually exercises are declared. A parental-control app that
+    requests wipe or password policies it never uses would be rejected on review, and would be
+    asking a parent for authority it does not need.
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <disable-camera />
+        <watch-login />
+    </uses-policies>
+</device-admin>

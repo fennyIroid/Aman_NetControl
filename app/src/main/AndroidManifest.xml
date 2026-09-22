@@ -1,0 +1,327 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+        Every privileged access this app uses is declared here explicitly. A permission that is
+        treated as silently available is one nobody reviews, and the manifest is the first place
+        that has to be honest.
+    -->
+
+    <!-- App restriction, AI and game budgets: foreground app detection and per-app time.
+         Usage Access is a special access granted in Settings; declaring it is what makes this
+         app appear in that Settings list at all. -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- Full installed-app enumeration. A restricted permission: Play requires a declared and
+         justified use case, and parental control is an accepted one. The <queries> block below
+         is the fallback that works without it. -->
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+
+    <!-- VPN restriction and ad removal: reading network state, and the tunnel itself. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- The block screen, the surface notice and the video blur layer. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- Parent alerts, and the ongoing notice a foreground service must show. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Keeping enforcement alive across reboots, updates and idle periods. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Protection health: knowing that Android's Advanced Protection Mode, not a child, is what
+         withdrew accessibility access. A normal permission; Android 16 and later. -->
+    <uses-permission android:name="android.permission.QUERY_ADVANCED_PROTECTION_MODE" />
+    <uses-permission
+        android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
+        tools:ignore="BatteryLife" />
+
+    <!-- Clone control: reading profile information across user spaces. -->
+    <uses-permission android:name="android.permission.INTERACT_ACROSS_PROFILES"
+        tools:ignore="ProtectedPermissions" />
+
+    <!--
+        Package visibility declarations (Android 11+).
+
+        Without these, a targeted check for a known app returns "not installed" even when it is.
+        Every package in the curated list appears here, which is also why that list has to stay
+        proportionate: the manifest is a public statement of what this app looks for.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+        <package android:name="ai.character.app" />
+        <package android:name="ai.replika.app" />
+        <package android:name="ai.x.grok" />
+        <package android:name="com.activision.callofduty.shooter" />
+        <package android:name="com.amazon.avod.thirdpartyclient" />
+        <package android:name="com.android.chrome" />
+        <package android:name="com.anthropic.claude" />
+        <package android:name="com.applisto.appcloner" />
+        <package android:name="com.brave.browser" />
+        <package android:name="com.byjus.thelearningapp" />
+        <package android:name="com.cloneapp.parallelspace.dualspace" />
+        <package android:name="com.deepseek.chat" />
+        <package android:name="com.disney.disneyplus" />
+        <package android:name="com.dts.freefireth" />
+        <package android:name="com.dualspace.multispace.android" />
+        <package android:name="com.duckduckgo.mobile.android" />
+        <package android:name="com.epicgames.fortnite" />
+        <package android:name="com.excelliance.dualaid" />
+        <package android:name="com.expressvpn.vpn" />
+        <package android:name="com.facebook.katana" />
+        <package android:name="com.facebook.lite" />
+        <package android:name="com.facebook.mlite" />
+        <package android:name="com.facebook.orca" />
+        <package android:name="com.fast.free.unblock.thunder.vpn" />
+        <package android:name="com.garena.game.kgvn" />
+        <package android:name="com.google.android.apps.bard" />
+        <package android:name="com.google.android.apps.classroom" />
+        <package android:name="com.google.android.apps.messaging" />
+        <package android:name="com.google.android.apps.youtube.kids" />
+        <package android:name="com.google.android.youtube" />
+        <package android:name="com.google.android.youtube.tv" />
+        <package android:name="com.imo.android.imoim" />
+        <package android:name="com.innersloth.spacemafia" />
+        <package android:name="com.instagram.android" />
+        <package android:name="com.instagram.lite" />
+        <package android:name="com.jide.repackaged.andcloneapp" />
+        <package android:name="com.jina.chat" />
+        <package android:name="com.king.candycrushsaga" />
+        <package android:name="com.kiwibrowser.browser" />
+        <package android:name="com.lbe.parallel" />
+        <package android:name="com.lbe.parallel.intl" />
+        <package android:name="com.linkedin.android" />
+        <package android:name="com.ludashi.dualspace" />
+        <package android:name="com.microsoft.bing" />
+        <package android:name="com.microsoft.emmx" />
+        <package android:name="com.microsoft.teams" />
+        <package android:name="com.miniclip.eightballpool" />
+        <package android:name="com.mojang.minecraftpe" />
+        <package android:name="com.mxtech.videoplayer.ad" />
+        <package android:name="com.netflix.mediaclient" />
+        <package android:name="com.nordvpn.android" />
+        <package android:name="com.openai.chatgpt" />
+        <package android:name="com.opera.browser" />
+        <package android:name="com.opera.mini.native" />
+        <package android:name="com.parallel.space.lite" />
+        <package android:name="com.perplexity.app.android" />
+        <package android:name="com.photomath.app" />
+        <package android:name="com.polestar.super.clone" />
+        <package android:name="com.protonvpn.android" />
+        <package android:name="com.quizlet.quizletandroid" />
+        <package android:name="com.quora.android.poe" />
+        <package android:name="com.reddit.frontpage" />
+        <package android:name="com.roblox.client" />
+        <package android:name="com.samsung.android.messaging" />
+        <package android:name="com.sec.android.app.sbrowser" />
+        <package android:name="com.skype.raider" />
+        <package android:name="com.snapchat.android" />
+        <package android:name="com.snapchat.android.myai" />
+        <package android:name="com.ss.android.ugc.trill" />
+        <package android:name="com.supercell.brawlstars" />
+        <package android:name="com.supercell.clashofclans" />
+        <package android:name="com.surfshark.vpnclient.android" />
+        <package android:name="com.tencent.ig" />
+        <package android:name="com.turbovpn.vpn.free" />
+        <package android:name="com.twitter.android" />
+        <package android:name="com.viber.voip" />
+        <package android:name="com.vkontakte.android" />
+        <package android:name="com.whatsapp" />
+        <package android:name="com.whatsapp.w4b" />
+        <package android:name="com.discord" />
+        <package android:name="com.pinterest" />
+        <package android:name="com.tumblr" />
+        <package android:name="com.duolingo" />
+        <package android:name="com.UCMobile.intl" />
+        <package android:name="kik.android" />
+        <package android:name="com.psiphon3" />
+        <package android:name="com.samsung.android.settings" />
+        <package android:name="com.android.settings" />
+        <package android:name="com.miui.securitycenter" />
+        <package android:name="com.zhiliaoapp.musically" />
+        <package android:name="de.blinkt.openvpn" />
+        <package android:name="do.multiple.space.parallel" />
+        <package android:name="free.vpn.unblock.proxy.turbovpn" />
+        <package android:name="hotspotshield.android.vpn" />
+        <package android:name="in.startv.hotstar" />
+        <package android:name="jp.naver.line.android" />
+        <package android:name="multi.parallel.dualspace.cloner" />
+        <package android:name="net.openvpn.openvpn" />
+        <package android:name="org.khanacademy.android" />
+        <package android:name="org.mozilla.firefox" />
+        <package android:name="org.telegram.messenger" />
+        <package android:name="org.thoughtcrime.securesms" />
+        <package android:name="org.thunderdog.challegram" />
+        <package android:name="org.torproject.torbrowser" />
+    </queries>
+
+    <application
+        android:name=".ChildSafetyApp"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.ChildSafety"
+        tools:targetApi="35">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.ChildSafety.Splash"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            The screen capture consent window.
+
+            Android only shows that dialog over an Activity and only accepts the answer for one
+            session, so this exists to be opened from a notification or the permissions list and
+            closed again immediately.
+        -->
+        <activity
+            android:name=".platform.projection.CaptureConsentActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.ChildSafety.Invisible" />
+
+        <!--
+            The enforcement loop.
+
+            specialUse is the honest declaration for continuous usage-stat polling; Android 14
+            requires the type and Play reviews the justification string.
+        -->
+        <service
+            android:name=".platform.enforcement.MonitoringService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Continuous child-safety enforcement of app restrictions, time limits and bypass detection." />
+        </service>
+
+        <!--
+            The filtering tunnel: blocked destinations and ad hosts refused device-wide, and the
+            single VPN slot held so a third-party VPN cannot take it.
+            BIND_VPN_SERVICE is enforced by the system.
+        -->
+        <service
+            android:name=".platform.network.ChildSafetyVpnService"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:stopWithTask="false"
+            android:foregroundServiceType="specialUse">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="DNS-level content and advertising filtering, and VPN bypass prevention." />
+        </service>
+
+        <!--
+            Video blurring: frame sampling and on-device classification.
+
+            stopWithTask is declared rather than left to the default on every enforcement service
+            here, because the default is the one thing a child will try. Swiping the app out of
+            recents must not be how a protection gets switched off, and a service that stops with
+            its task is exactly that. It is stated explicitly so nobody has to remember which way
+            the platform default falls, and so a review of this file can see the intent.
+        -->
+        <service
+            android:name=".platform.projection.ScreenAnalysisService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <!--
+            Screen-level detection and enforcement: Shorts and Reels, Status and Stories, AI
+            conversations, and the system VPN screen.
+
+            BIND_ACCESSIBILITY_SERVICE is enforced by the system, and Play requires a declared
+            accessibility purpose. This is the most policy-sensitive declaration in the app.
+        -->
+        <service
+            android:name=".platform.accessibility.SafetyAccessibilityService"
+            android:exported="true"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- Communication signals from message notifications. -->
+        <service
+            android:name=".platform.notification.SafetyNotificationListener"
+            android:exported="true"
+            android:label="@string/notification_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!--
+            Device admin.
+
+            This only makes uninstall require deactivation first, which is a real deterrent
+            against a child simply removing the app. Full policy control needs Device Owner,
+            which cannot be granted to an app installed from the Play Store.
+        -->
+        <receiver
+            android:name=".platform.admin.SafetyDeviceAdminReceiver"
+            android:exported="true"
+            android:description="@string/device_admin_description"
+            android:label="@string/device_admin_label"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin_policies" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Restarts enforcement after a reboot or an update, if the parent had it on. -->
+        <receiver
+            android:name=".platform.enforcement.BootCompletedReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+
+</manifest>

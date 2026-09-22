@@ -1,0 +1,26 @@
+<resources>
+
+    <!-- The Compose theme owns everything visual; this exists so the window has the right
+         background before the first frame and the splash does not flash white-on-white. -->
+    <style name="Theme.ChildSafety" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/canvas</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <style name="Theme.ChildSafety.Splash" parent="Theme.ChildSafety">
+        <item name="android:windowBackground">@drawable/splash_background</item>
+    </style>
+
+    <!-- The window that asks for screen capture consent. It must be an Activity and it must
+         never be seen, so it has no background, no title and no animation. -->
+    <style name="Theme.ChildSafety.Invisible" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
+
+</resources>
