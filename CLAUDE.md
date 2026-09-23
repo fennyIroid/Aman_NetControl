@@ -85,6 +85,7 @@ has a route, unique id, and no permission listed as both required and strengthen
 | Ad removal | `AdBlockList` at three layers: DNS in the tunnel, request interception in the browser and player, CSS to hide the slots. |
 | Browser image blurring | `SafeBrowserEngine` + `ImageSafetyClassifier` + `ImageBlur`. Images are fetched, scored and blurred before the page receives them. |
 | Video blurring | `ScreenAnalysisService` samples frames through `MediaProjection`. `ScreenRegions` finds the picture-shaped parts of the frame, `FrameScanner` classifies each one separately, `CoverPolicy` decides which covers stay up, `VerdictStability` keeps one picture's verdict steady across the frames it appears in, `RowProfile` measures how far the page moved so the covers move with it — or, where the app in front reports its own scroll through the accessibility service, `ScrollLedger` says exactly how far — `SceneSignature` decides whether it is still the same screen at all, with the accessibility service's foreground-window signal as the authority when it is granted, and `BlockOverlayController` gives each covered picture its own window — added through the accessibility service so it can be opaque and still let touches through — holding a blurred copy of it (`ImageBlur.blurPreview`) and nothing else. Covering the individual failing pictures is the default; whole-screen and cover-people are the other two modes. |
+| Browser image search | `BrowserImageCover`, ported from SafeScreen, part of video blurring. On an image-search results page (`ImageSearchSurface`) in a Chromium browser, from Android 14 with the accessibility service on, it covers every photo the moment the page is recognised and uncovers each one only once it is judged clean. Below Android 14 image search stays with the capture loop. Photos are found in the accessibility tree (`ImageRegions`), followed while the page moves by re-reading one photo per scroll container every frame (`AnchorTracker`, `PatchMotion`), and judged on `takeScreenshotOfWindow` captures of the browser alone by `TfliteNsfwClassifier` and `TfliteDrugClassifier` (MobileCLIP-S0 + `DrugPrompts`) under `BrowserImagePolicy`. One full-screen `ScrimOverlay` draws a patch per photo holding a heavily downscaled copy (`BackdropBlur`). While it holds the screen the capture loop stands down (`ScreenSignalStore.browserImages`); see rule 31. |
 | Internet pause | `InternetPauseController` switches `ChildSafetyVpnService` into `TunnelMode.PAUSED`: a default route with nothing forwarded. Persisted before it is applied, restored on boot, and read back by the tunnel on every start (`TunnelMode.restingFor`). `MonitoringService` re-applies a pause the tunnel lost, shows the child a paused notice over network-dependent apps, and alerts the parent when the pause cannot be put back. One tap from the dashboard and from Controls. |
 
 ## Sprint 0 additions
@@ -129,6 +130,12 @@ follows is where to look.
   from the *uncovered* part of the screen rather than by re-classifying the ground it is standing
   on; a scroll moves the covers rather than discarding them; and neither where a picture is nor
   what it is may be settled from a single frame.
+- **`platform/browserimages/`** — SafeScreen's browser image-search covering, ported. Each file
+  keeps SafeScreen's KDoc with the device measurements behind it (Chrome 152/153). The models are
+  `assets/nsfw_mobilenet_v2_140_224.tflite` (GantMan, MIT) and
+  `assets/mobileclip_s0_image_fp16.tflite` with `drug_prompts.bin` (Apple sample-code licence),
+  run through LiteRT rather than ML Kit because neither carries ML Kit metadata. The tests beside
+  it run under Robolectric (`src/test/resources/robolectric.properties` pins SDK 34).
 - **`platform/content/PurposeTrainedLabeler.kt`** — the slot a model built for this job sits in,
   loaded from `assets/nsfw.tflite` through ML Kit's custom image labelling. Empty in this build, so
   `ModelIdentity.purposeTrained` stays false and the general labeller keeps judging as a declared
@@ -372,6 +379,26 @@ that lies to a parent.
     pause back when no restart happens at all. A start the posture has no tunnel for calls
     `startForeground` before standing down, because a foreground-service start that never does is
     a crash.
+
+31. **One screen, one covering pipeline, and the browser path only where it can keep its promise.**
+    On a browser image search `BrowserImageCover` covers first and reveals what is clean; everywhere
+    else the capture loop shows first and covers what is unsafe. Both drawing over one grid fight,
+    and the capture loop would be judging the other path's covers — rule 17 across pipelines. So
+    while the browser path holds the screen it publishes that through
+    `ScreenSignalStore.browserImages`, and `ScreenAnalysisService.consider` takes its own covers
+    down, forgets the screen, and judges nothing until `BROWSER_HANDBACK_SETTLE_MILLIS` after the
+    hand-back — holding, not dropping, the frame that arrives meanwhile (rule 28). The browser path
+    takes a page only when it can deliver everything the parent asked for there
+    (`BrowserImagePolicy.from` returns null otherwise): per-picture mode, only the categories its
+    models judge (explicit, which includes drug imagery, and suggestive), both models loaded,
+    Android 14 for a capture of the browser without this app's covers in it, and a Chromium browser,
+    where the tree was measured to say which nodes are photos. Below Android 14 it could only cover
+    every photo and uncover none, which on a search for anything harmless reads as broken, so
+    Android 13 and earlier stay with the capture loop. Anything else stays with the capture
+    loop, exactly as before — widening the scope means driving it on a device first. The browser
+    path's model is purpose-trained (rule 11 is satisfied there, not by `ModelIdentity` of the
+    capture loop), and what it logs is counts, never the search (rule 3: `ImageSearchPage.key` is a
+    hash).
 
 ## Testing
 

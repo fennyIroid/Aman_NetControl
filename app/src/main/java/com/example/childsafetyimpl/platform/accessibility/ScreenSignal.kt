@@ -20,6 +20,19 @@ data class ForegroundWindow(
     val changes: Long = 0,
 )
 
+/**
+ * Which pipeline covers pictures in the browser. [releasedAtUptime] is when the browser path last
+ * handed the screen back, on the uptime clock; zero if it never held it.
+ */
+data class BrowserImagesHandoff(
+    val active: Boolean = false,
+    val releasedAtUptime: Long = 0L,
+) {
+    /** Whether the capture loop must keep out of the way at [nowUptime]. */
+    fun holdsScreen(nowUptime: Long, settleMillis: Long): Boolean =
+        active || (releasedAtUptime > 0L && nowUptime - releasedAtUptime < settleMillis)
+}
+
 /** What the accessibility service believes is on screen right now. */
 data class ScreenSignal(
     val packageName: String,
@@ -68,6 +81,25 @@ class ScreenSignalStore @Inject constructor() {
      */
     val scroll = ScrollLedger()
 
+    private val _browserImages = MutableStateFlow(BrowserImagesHandoff())
+
+    /**
+     * Whether the browser image-search path owns the screen, and when it last let go of it.
+     *
+     * Two pipelines can cover pictures in a browser and only one may. The capture loop stands down
+     * while this is active and for a moment after, because its capture shows the browser path's
+     * covers and rule 17 applies to another pipeline's paint as much as to its own. See
+     * `BrowserImageCover` and `ScreenAnalysisService.consider`.
+     */
+    val browserImages: StateFlow<BrowserImagesHandoff> = _browserImages.asStateFlow()
+
+    fun setBrowserImagesActive(active: Boolean, atUptime: Long) = _browserImages.update { current ->
+        when {
+            current.active == active -> current
+            active -> current.copy(active = true)
+            else -> BrowserImagesHandoff(active = false, releasedAtUptime = atUptime)
+        }
+    }
 
     /**
      * Records which app's window is in front, if it is not the one already recorded.

@@ -11,12 +11,19 @@
     distance lost; the service throttles its own tree walks in code instead. canRetrieveWindowContent is the flag that makes this service policy-sensitive on
     Google Play, and the app declares an accessibility purpose for it accordingly.
 
+    canTakeScreenshot and flagRetrieveInteractiveWindows are for covering image-search results in
+    a browser (BrowserImageCover). The window list is how it tells which app is really in front
+    when a system toolbar has the focus, and takeScreenshotOfWindow (Android 14) captures that one
+    browser window, without this app's covers in it, so each photo can be judged in memory and
+    uncovered once it is clean. No capture is kept.
+
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewScrolled"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagReportViewIds|flagIncludeNotImportantViews"
+    android:accessibilityFlags="flagReportViewIds|flagIncludeNotImportantViews|flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
     android:description="@string/accessibility_service_description"
     android:notificationTimeout="0"
     android:settingsActivity="com.example.childsafetyimpl.MainActivity" />

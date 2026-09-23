@@ -278,6 +278,9 @@ class ScreenAnalysisService : Service() {
 
     /** Set when the parent stopped the session, so its ending is not reported as a failure. */
     @Volatile private var stoppedByParent = false
+
+    /** Set once this loop has let go of the screen for the browser path; see [standDownForBrowser]. */
+    @Volatile private var stoodDownForBrowser = false
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -425,6 +428,38 @@ class ScreenAnalysisService : Service() {
 
     private fun consider(image: Image, arrivedAt: Long) {
         val now = System.currentTimeMillis()
+
+        // A browser image search belongs to the browser path, which knows where each photo is
+        // from the page itself and captures the browser without anyone's covers over it. While
+        // it holds the screen this loop draws nothing and judges nothing: two sets of covers over
+        // one grid fight, and this capture would be judging the other path's paint (rule 17).
+        // The hold outlasts the hand-back by a moment, because the capture shows those covers a
+        // frame or two after they come down.
+        val handoff = signalStore.browserImages.value
+        val uptime = SystemClock.uptimeMillis()
+        if (handoff.holdsScreen(uptime, BROWSER_HANDBACK_SETTLE_MILLIS)) {
+            if (analysisInFlight) {
+                pendingImage = image
+                pendingArrivedAt = arrivedAt
+                handler?.postDelayed(retryPending, BUSY_RETRY_MILLIS)
+                return
+            }
+            standDownForBrowser()
+            if (handoff.active) {
+                // Handing back is a screen change — the browser's covers come down — so a frame
+                // is on its way when it happens; this one can go.
+                image.close()
+                return
+            }
+            // Handing back: held, never dropped, because on a still page it may be the last frame
+            // there is (rule 28). Looked at once the browser's covers are certainly out of it.
+            pendingImage = image
+            pendingArrivedAt = arrivedAt
+            val wait = handoff.releasedAtUptime + BROWSER_HANDBACK_SETTLE_MILLIS - uptime
+            handler?.postDelayed(retryPending, wait.coerceAtLeast(BUSY_RETRY_MILLIS))
+            return
+        }
+        stoodDownForBrowser = false
 
         // Two rates, because deciding what to cover and keeping up with where it went are
         // different jobs with different costs. Classifying is expensive and its answer cannot
@@ -749,6 +784,24 @@ class ScreenAnalysisService : Service() {
             },
             strength = settings.blurStrength,
         )
+    }
+
+    /**
+     * Takes this loop's covers down and forgets the screen they were judged on, so that when the
+     * browser path hands the screen back everything here starts from the next frame rather than
+     * from a page that was replaced while this loop was not looking.
+     */
+    private fun standDownForBrowser() {
+        if (stoodDownForBrowser) return
+        stoodDownForBrowser = true
+        activeCovers = emptyList()
+        clearCovers(drawnStrength)
+        lastLayout = null
+        lastProfile = null
+        lastSignature = null
+        lastWindowChanges = -1L
+        coversAnchoredScroll = signalStore.scroll.total()
+        forceScan = true
     }
 
     private fun clearCovers(strength: Float) {
@@ -1443,6 +1496,13 @@ class ScreenAnalysisService : Service() {
          * own movement as a navigation and coming down. See [settlingRegions].
          */
         private const val COVER_SETTLE_MILLIS = 400L
+
+        /**
+         * How long after the browser image-search path lets go of the screen this loop still keeps
+         * out of it. The same reasoning as [COVER_SETTLE_MILLIS], applied to the other path's
+         * covers: the capture can show them for a frame or two after they come down.
+         */
+        private const val BROWSER_HANDBACK_SETTLE_MILLIS = 400L
 
         /**
          * The smallest reported scroll worth moving a window for, in screen pixels. Smaller

@@ -1,15 +1,178 @@
+# ==============================
+# Android / Gradle
+# ==============================
+
 *.iml
-.gradle
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+.gradle/
+build/
+**/build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Gradle generated files
+.gradle/
+gradle-app.setting
+!gradle-wrapper.jar
+
+# Local SDK configuration
 local.properties
+
+
+# ==============================
+# Android Studio / IntelliJ IDEA
+# ==============================
+
+.idea/
+*.iws
+*.ipr
+
+# Keep shared project configuration if needed
+!.idea/codeStyles/
+!.idea/inspectionProfiles/
+
+# ==============================
+# VS Code
+# ==============================
+
+.vscode/
+
+
+# ==============================
+# Cursor
+# ==============================
+
+.cursor/
+
+
+# ==============================
+# Claude Code
+# ==============================
+
+.claude/
+
+
+# ==============================
+# AI / IDE generated files
+# ==============================
+
+.aider/
+.windsurf/
+.continue/
+.copilot/
+
+
+# ==============================
+# Environment / Secrets
+# ==============================
+
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Keystores / signing files
+*.jks
+*.keystore
+*.p12
+*.pfx
+
+# Google / Firebase private configuration
+google-services.json
+
+# ==============================
+# OS generated files
+# ==============================
+
+.DS_Store
+.DS_Store?
+Thumbs.db
+desktop.ini
+
+
+# ==============================
+# Logs / Temporary files
+# ==============================
+
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+*.bak
+*.orig
+
+
+# ==============================
+# Kotlin
+# ==============================
+
+*.class
+.kotlin/
+
+
+# ==============================
+# Native / C++
+# ==============================
+
+.cxx/
+.externalNativeBuild/
+
+
+# ==============================
+# Build / Packaging
+# ==============================
+
+*.apk
+*.aab
+*.ap_
+*.dex
+
+
+# ==============================
+# Test / Coverage
+# ==============================
+
+coverage/
+*.coverage
+jacoco/
+
+
+# ==============================
+# Fastlane
+# ==============================
+
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output/
+
+
+# ==============================
+# Firebase
+# ==============================
+
+.firebase/
+firebase-debug.log
+firebaserc
+
+
+# ==============================
+# Node / JavaScript tooling
+# ==============================
+
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+
+# ==============================
+# Temporary / Generated folders
+# ==============================
+
+/out/
+dist/
+tmp/
+temp/

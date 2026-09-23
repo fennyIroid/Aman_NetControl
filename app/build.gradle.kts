@@ -37,6 +37,9 @@ android {
         compose = true
         buildConfig = true
     }
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -77,6 +80,9 @@ dependencies {
     // labeller only ever produced a whole-frame verdict.
     implementation(libs.mlkit.face.detection)
     implementation(libs.mlkit.segmentation.selfie)
+    // The browser image-search path's two models: SafeScreen's NSFW classifier and MobileCLIP-S0.
+    // Plain interpreters rather than ML Kit, because neither model carries ML Kit's metadata.
+    implementation(libs.litert)
     implementation(libs.gson)
     implementation(libs.kotlinx.coroutines.android)
 
@@ -90,6 +96,11 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    // For the browser image-search tests ported from SafeScreen, which exercise Rect and
+    // AccessibilityNodeInfo as the device has them.
+    testImplementation(libs.robolectric)
+    testImplementation(libs.truth)
+    testImplementation(libs.mockk)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

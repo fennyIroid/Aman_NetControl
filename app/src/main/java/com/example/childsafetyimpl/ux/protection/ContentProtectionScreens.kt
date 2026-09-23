@@ -612,6 +612,21 @@ fun VideoBlurringScreen(viewModel: VideoBlurringViewModel) {
                     "anything on it can be recognised from one frame to the next — then the " +
                     "covers come down and go back up on the new screen.",
             )
+            BulletLine(
+                "Image search results in Chrome, Edge, Brave and Kiwi are handled differently " +
+                    "from Android 14 with the accessibility service on: every photo is covered " +
+                    "as the page opens and uncovered only once it is judged clean, by a model " +
+                    "built for explicit content and one for drug imagery. It does not need screen " +
+                    "capture. In an incognito tab the photos cannot be looked at, so they stay " +
+                    "covered. Other browsers, ordinary web pages and earlier Android versions use " +
+                    "the capture above.",
+            )
+            BulletLine(
+                "That image search handling covers only explicit and suggestive imagery, and " +
+                    "only one picture at a time. With gambling or alcohol and smoking switched " +
+                    "on, or whole-screen or people covering chosen, image search stays with the " +
+                    "capture above. Its blur is fixed and does not follow the strength slider.",
+            )
         }
     }
 }

@@ -7,9 +7,12 @@ import android.os.SystemClock
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.example.childsafetyimpl.data.prefs.SafetyPreferences
 import com.example.childsafetyimpl.di.ApplicationScope
 import com.example.childsafetyimpl.domain.model.RestrictedSurface
+import com.example.childsafetyimpl.domain.repository.SafetyEventRepository
 import com.example.childsafetyimpl.platform.ai.AiActivityMonitor
+import com.example.childsafetyimpl.platform.browserimages.BrowserImageCover
 import com.example.childsafetyimpl.platform.enforcement.BlockOverlayController
 import com.example.childsafetyimpl.platform.enforcement.SurfaceBlockDecision
 import com.example.childsafetyimpl.platform.usage.AppInventoryProvider
@@ -51,8 +54,17 @@ class SafetyAccessibilityService : AccessibilityService() {
     @Inject lateinit var aiMonitor: AiActivityMonitor
     @Inject lateinit var inventory: AppInventoryProvider
     @Inject lateinit var overlayController: BlockOverlayController
+    @Inject lateinit var preferences: SafetyPreferences
+    @Inject lateinit var eventRepository: SafetyEventRepository
 
     @Inject @ApplicationScope lateinit var scope: CoroutineScope
+
+    /**
+     * Covers image-search results in Chromium browsers, from Android 14 where the browser's window
+     * can be captured without anyone's covers in it. Null below that, and the capture loop keeps
+     * the browser as before. See [BrowserImageCover].
+     */
+    private var browserImages: BrowserImageCover? = null
 
     /** Guards against re-walking the tree for every scroll event inside a feed. */
     private var lastWalkAt = 0L
@@ -64,11 +76,24 @@ class SafetyAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         connected = this
         signalStore.setConnected(true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            browserImages = BrowserImageCover(this, signalStore, preferences, eventRepository, scope)
+                .also { it.start() }
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         val packageName = event.packageName?.toString() ?: return
+
+        // Every event, scrolls included and before the throttle: the browser path's covers follow
+        // the page at the rate it changes. Returns at once for anything that is not a browser
+        // while it has nothing covered. Ahead of the own-package check below, because this app's
+        // own screen coming to the front is one of the things that takes those covers down.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            browserImages?.onEvent(event, packageName)
+        }
+
         if (packageName == this.packageName) return
 
         // How far the page moved, as the app doing the moving reports it, for the covers to follow.
@@ -256,6 +281,8 @@ class SafetyAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         if (connected === this) connected = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) browserImages?.release()
+        browserImages = null
         signalStore.setConnected(false)
         scope.launch { surfaceGuard.release() }
         super.onDestroy()

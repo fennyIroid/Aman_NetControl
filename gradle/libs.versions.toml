@@ -24,10 +24,18 @@ mlkitImageLabeling = "17.0.9"
 mlkitImageLabelingCustom = "17.0.3"
 mlkitFaceDetection = "16.1.7"
 mlkitSegmentation = "16.0.0-beta6"
+litert = "1.4.2"
+robolectric = "4.17"
+truth = "1.4.4"
+mockk = "1.13.13"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+truth = { group = "com.google.truth", name = "truth", version.ref = "truth" }
+mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
+litert = { group = "com.google.ai.edge.litert", name = "litert", version.ref = "litert" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
