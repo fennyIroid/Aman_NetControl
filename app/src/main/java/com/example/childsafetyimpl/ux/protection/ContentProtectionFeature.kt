@@ -15,6 +15,7 @@ import com.example.childsafetyimpl.navigation.ViewModelNav
 import com.example.childsafetyimpl.navigation.ViewModelNavImpl
 import com.example.childsafetyimpl.platform.browser.SafeBrowserEngine
 import com.example.childsafetyimpl.platform.content.BlurMode
+import com.example.childsafetyimpl.platform.content.PrivateTabAction
 import com.example.childsafetyimpl.platform.content.ProtectionLevel
 import com.example.childsafetyimpl.platform.content.ValuesCategory
 import com.example.childsafetyimpl.platform.content.SubjectCategory
@@ -221,6 +222,7 @@ data class VideoBlurringUiState(
     val blurSubjects: Set<SubjectCategory> = setOf(SubjectCategory.PERSON),
     val protectionLevel: ProtectionLevel = ProtectionLevel.default,
     val blurCategories: Set<ValuesCategory> = ValuesCategory.defaults,
+    val privateTabAction: PrivateTabAction = PrivateTabAction.default,
 )
 
 sealed interface VideoBlurringUiEvent {
@@ -229,6 +231,7 @@ sealed interface VideoBlurringUiEvent {
     data class ToggleBlur(val enabled: Boolean) : VideoBlurringUiEvent
     data class SetStrength(val strength: Float) : VideoBlurringUiEvent
     data class SetBlurMode(val mode: BlurMode) : VideoBlurringUiEvent
+    data class SetPrivateTabAction(val action: PrivateTabAction) : VideoBlurringUiEvent
     data class SetProtectionLevel(val level: ProtectionLevel) : VideoBlurringUiEvent
     data class ToggleCategory(val category: ValuesCategory) : VideoBlurringUiEvent
     data class ToggleSubject(val subject: SubjectCategory) : VideoBlurringUiEvent
@@ -269,6 +272,7 @@ class GetVideoBlurringUiStateUseCase @Inject constructor(
                 protectionLevel = blurringAndSettings.second.blurProtectionLevel,
                 blurCategories = blurringAndSettings.second.blurCategories,
                 blurSubjects = blurringAndSettings.second.blurSubjects,
+                privateTabAction = blurringAndSettings.second.privateTabAction,
             )
         }.collect { state -> _uiState.update { state } }
     }
@@ -315,6 +319,10 @@ class VideoBlurringViewModel @Inject constructor(
 
             is VideoBlurringUiEvent.SetBlurMode -> viewModelScope.launch {
                 preferences.setBlurMode(event.mode)
+            }
+
+            is VideoBlurringUiEvent.SetPrivateTabAction -> viewModelScope.launch {
+                preferences.setPrivateTabAction(event.action)
             }
 
             is VideoBlurringUiEvent.SetProtectionLevel -> viewModelScope.launch {

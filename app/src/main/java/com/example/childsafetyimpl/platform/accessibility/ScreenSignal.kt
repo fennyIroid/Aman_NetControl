@@ -1,5 +1,6 @@
 package com.example.childsafetyimpl.platform.accessibility
 
+import com.example.childsafetyimpl.platform.content.Box
 import com.example.childsafetyimpl.platform.content.ScrollLedger
 import com.example.childsafetyimpl.domain.model.RestrictedSurface
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -68,6 +69,71 @@ class ScreenSignalStore @Inject constructor() {
      */
     val scroll = ScrollLedger()
 
+    private val _privateTab = MutableStateFlow<String?>(null)
+
+    /**
+     * The browser showing a private tab right now, or null.
+     *
+     * Decided by the covering loop, which is the one that sees the window go black, from the
+     * foreground package the accessibility service reports (see PrivateTabTracker); acted on by
+     * the accessibility service, which is the one that can find the pictures and cover them or
+     * send the child home. A package name and nothing else: no URL, no title, no content.
+     */
+    val privateTab: StateFlow<String?> = _privateTab.asStateFlow()
+
+    private val coverHistory = ArrayDeque<Pair<Long, List<Box>>>()
+
+    /**
+     * Everywhere a private-tab cover has been drawn from shortly before [frameTime] until now, in
+     * screen pixels. The covering loop leaves all of it out when it decides whether the window is
+     * still black, because it is looking at its own output there (rule 17). The span matters as
+     * much as the place: the capture shows covers a frame or two late, and a frame the loop was
+     * too busy for is held and looked at later (rule 28), so a frame can show covers that have
+     * since moved. [frameTime] is the frame's own capture time, on the uptime clock.
+     */
+    @Synchronized
+    fun recentPrivateCovers(frameTime: Long): List<Box> {
+        val now = android.os.SystemClock.uptimeMillis()
+        // Nothing still on screen at or after this can be in any frame that is yet to be judged.
+        while (coverHistory.size > 1 && now - coverHistory[1].first > MAX_FRAME_AGE_MILLIS) {
+            coverHistory.removeFirst()
+        }
+        val since = frameTime - PRIVATE_COVER_SETTLE_MILLIS
+        return coverHistory.filterIndexed { index, _ ->
+            // An entry was on screen until the next one replaced it.
+            val replacedAt = coverHistory.getOrNull(index + 1)?.first ?: Long.MAX_VALUE
+            replacedAt >= since
+        }.flatMap { it.second }.distinct()
+    }
+
+    /**
+     * Set by the covering loop from what it sees. A tab it has seen turn normal in the browser
+     * still in use is forgotten entirely, so coming back to that browser is not treated as coming
+     * back to a private tab.
+     */
+    fun setPrivateTab(packageName: String?) {
+        val was = _privateTab.value
+        // Forgotten only when the browser was still the app in use: then its tab really turned
+        // normal. Ended any other way, the browser was left, and is remembered for its return.
+        if (packageName == null && was != null && was == _activeApp.value) leftWhilePrivate = null
+        _privateTab.value = packageName
+    }
+
+    /**
+     * A browser the child left while its tab was private. The tab is almost certainly still
+     * private when the browser comes back, and the capture takes up to half a second to see that
+     * again, so the covers go up on arrival instead (rule 12); the capture then confirms the tab
+     * or lets it go on its usual evidence.
+     */
+    @Volatile private var leftWhilePrivate: String? = null
+
+    @Synchronized
+    fun setPrivateCovers(covers: List<Box>, now: Long = android.os.SystemClock.uptimeMillis()) {
+        if (covers.isEmpty()) coverHistory.clear()
+        else coverHistory.addLast(now to covers)
+        if (coverHistory.size > MAX_COVER_HISTORY) coverHistory.removeFirst()
+    }
+
 
     /**
      * Records which app's window is in front, if it is not the one already recorded.
@@ -93,6 +159,30 @@ class ScreenSignalStore @Inject constructor() {
         else ForegroundWindow(packageName, current.changes + 1)
     }
 
+    private val _activeApp = MutableStateFlow("")
+
+    /**
+     * The app that owns the active window, which is not always the one [foreground] names:
+     * the keyboard and the notification shade raise window events of their own without ever
+     * becoming the window the child is using. The private-tab handling keys off this one, because
+     * the keyboard coming up over an incognito address bar must not end the private tab.
+     */
+    val activeApp: StateFlow<String> = _activeApp.asStateFlow()
+
+    fun noteActiveApp(packageName: String) {
+        _activeApp.value = packageName
+        val private = _privateTab.value
+        // A private tab belongs to the browser it was seen in. Once another app is in use it is
+        // over, and waiting for the next captured frame to say so would leave the covers standing
+        // over whatever came next.
+        if (private != null && private != packageName) {
+            leftWhilePrivate = private
+            _privateTab.value = null
+        } else if (private == null && packageName == leftWhilePrivate) {
+            _privateTab.value = packageName
+        }
+    }
+
     fun setConnected(connected: Boolean) {
         _connected.value = connected
         if (!connected) _current.value = null
@@ -116,6 +206,15 @@ class ScreenSignalStore @Inject constructor() {
             surfacesClosed = it.surfacesClosed + 1,
             closedBySurface = it.closedBySurface + (surface to (it.closedBySurface[surface] ?: 0) + 1),
         )
+    }
+
+    private companion object {
+        /** How long the capture can go on showing a private-tab cover where it no longer is. */
+        const val PRIVATE_COVER_SETTLE_MILLIS = 600L
+
+        /** Older than this, a frame is not held for judging; history beyond it is never needed. */
+        const val MAX_FRAME_AGE_MILLIS = 5_000L
+        const val MAX_COVER_HISTORY = 64
     }
 
     fun reset() {

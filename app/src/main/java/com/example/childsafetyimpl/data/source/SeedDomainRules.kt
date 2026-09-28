@@ -13,6 +13,9 @@ import com.example.childsafetyimpl.domain.model.WebCategory
  * licensed, continuously maintained feed running to millions of entries; the catalog records that
  * explicitly against the category-blocking capability. What this list proves is the mechanism:
  * that a name reaching the tunnel or the browser can be matched, categorised and refused.
+ *
+ * The adult and violence categories also draw on [BundledHostLists], which is where their
+ * coverage actually comes from; these rows stay because they are visible and editable in Room.
  */
 object SeedDomainRules {
 

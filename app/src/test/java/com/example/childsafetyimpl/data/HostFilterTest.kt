@@ -10,6 +10,7 @@ import com.example.childsafetyimpl.data.local.WebCategoryDao
 import com.example.childsafetyimpl.data.local.WebCategorySettingEntity
 import com.example.childsafetyimpl.data.prefs.SafetyPreferences
 import com.example.childsafetyimpl.data.repository.SafetyRulesRepositoryImpl
+import com.example.childsafetyimpl.data.source.HostSet
 import com.example.childsafetyimpl.domain.model.AppCategory
 import com.example.childsafetyimpl.domain.model.RuleAction
 import com.example.childsafetyimpl.domain.model.RuleSource
@@ -36,12 +37,14 @@ class HostFilterTest {
         rules: List<DomainRuleEntity>,
         blockedCategories: Set<WebCategory> = setOf(WebCategory.ADULT, WebCategory.GAMBLING),
         allowListOnly: Boolean = false,
+        bundled: Map<WebCategory, HostSet> = emptyMap(),
     ): SafetyRulesRepositoryImpl = SafetyRulesRepositoryImpl(
         appRuleDao = FakeAppRuleDao(),
         categoryBudgetDao = FakeCategoryBudgetDao(),
         domainRuleDao = FakeDomainRuleDao(rules),
         webCategoryDao = FakeWebCategoryDao(blockedCategories),
         preferences = FakePreferences(allowListOnly),
+        hostLists = { bundled },
         ioDispatcher = dispatcher,
     )
 
@@ -207,6 +210,71 @@ class HostFilterTest {
     @Test
     fun `an empty host is allowed rather than crashing`() = runTest(dispatcher) {
         assertTrue(repository(emptyList()).evaluateHost("").allowed)
+    }
+
+    /**
+     * Lookups are indexed by pattern now, so when several rules match, the one reported has to be
+     * the same one the old in-order scan reported: the first stored, not the most specific.
+     */
+    @Test
+    fun `of several matching rules the first stored is the one reported`() = runTest(dispatcher) {
+        val repository = repository(
+            listOf(blockRule("example.com", WebCategory.ADULT), blockRule("cdn.example.com", WebCategory.GAMBLING)),
+        )
+        assertEquals("example.com", repository.evaluateHost("img.cdn.example.com").matchedPattern)
+    }
+
+    // --- bundled lists and keywords ---------------------------------------------------------
+
+    private val adultList = mapOf(WebCategory.ADULT to HostSet.of(listOf("listed-adult.example")))
+
+    @Test
+    fun `a bundled list blocks a host and its subdomains while its category is on`() = runTest(dispatcher) {
+        val repository = repository(emptyList(), bundled = adultList)
+        listOf("listed-adult.example", "cdn.listed-adult.example").forEach {
+            val verdict = repository.evaluateHost(it)
+            assertFalse("$it should be blocked", verdict.allowed)
+            assertEquals(WebCategory.ADULT, verdict.category)
+            assertEquals("listed-adult.example", verdict.matchedPattern)
+        }
+        assertTrue(repository.evaluateHost("notlisted-adult.example").allowed)
+    }
+
+    @Test
+    fun `a bundled list does nothing while its category is off`() = runTest(dispatcher) {
+        val repository = repository(emptyList(), blockedCategories = emptySet(), bundled = adultList)
+        assertTrue(repository.evaluateHost("listed-adult.example").allowed)
+    }
+
+    @Test
+    fun `a parent allow beats a bundled list`() = runTest(dispatcher) {
+        val allow = DomainRuleEntity(
+            id = 11,
+            pattern = "listed-adult.example",
+            category = WebCategory.UNCATEGORISED,
+            action = RuleAction.ALLOW,
+            source = RuleSource.PARENT,
+            enabled = true,
+        )
+        assertTrue(repository(listOf(allow), bundled = adultList).evaluateHost("listed-adult.example").allowed)
+    }
+
+    /** A list nobody on this device wrote must not be able to take the phone's plumbing down. */
+    @Test
+    fun `a bundled list never blocks a host the phone depends on`() = runTest(dispatcher) {
+        val repository = repository(
+            emptyList(),
+            bundled = mapOf(WebCategory.ADULT to HostSet.of(listOf("google.com", "gvt1.com"))),
+        )
+        assertTrue(repository.evaluateHost("mtalk.google.com").allowed)
+        assertTrue(repository.evaluateHost("r3---sn-abc.gvt1.com").allowed)
+    }
+
+    @Test
+    fun `an unmistakably adult name is blocked only while the adult category is on`() = runTest(dispatcher) {
+        assertFalse(repository(emptyList()).evaluateHost("free-porn.example").allowed)
+        assertTrue(repository(emptyList(), blockedCategories = emptySet()).evaluateHost("free-porn.example").allowed)
+        assertTrue(repository(emptyList()).evaluateHost("essex.ac.uk").allowed)
     }
 }
 

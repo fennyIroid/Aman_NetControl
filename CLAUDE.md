@@ -81,10 +81,10 @@ has a route, unique id, and no permission listed as both required and strengthen
 | Status and Stories control | Same engine, different signatures. |
 | AI chat and game monitoring | `AiActivityMonitor` for time and budgets, `AiPromptRiskScorer` for the conversation surface. |
 | App restriction | `MonitoringService` polls `UsageStatsManager` and shows `BlockOverlayController`'s block screen. |
-| Search and site filtering | `SafeSearchDns` rewrites search-engine lookups in the tunnel to each engine's published filtered address, and `SearchTermGuard` reads the address bar and search fields of other browsers against `BlockedSearchTerms`. |
+| Search and site filtering | `SafeSearchDns` rewrites search-engine lookups in the tunnel to each engine's published filtered address, and `SearchTermGuard` reads the address bar and search fields of other browsers against `BlockedSearchTerms`. Sites are judged by `SafetyRulesRepository.evaluateHost`: the parent's rules, the Room category rules, then the bundled category lists (`BundledHostLists`, ~64k adult hosts held as a `HostSet`) and `AdultHostKeywords`. |
 | Ad removal | `AdBlockList` at three layers: DNS in the tunnel, request interception in the browser and player, CSS to hide the slots. |
 | Browser image blurring | `SafeBrowserEngine` + `ImageSafetyClassifier` + `ImageBlur`. Images are fetched, scored and blurred before the page receives them. |
-| Video blurring | `ScreenAnalysisService` samples frames through `MediaProjection`. `ScreenRegions` finds the picture-shaped parts of the frame, `FrameScanner` classifies each one separately, `CoverPolicy` decides which covers stay up, `VerdictStability` keeps one picture's verdict steady across the frames it appears in, `RowProfile` measures how far the page moved so the covers move with it — or, where the app in front reports its own scroll through the accessibility service, `ScrollLedger` says exactly how far — `SceneSignature` decides whether it is still the same screen at all, with the accessibility service's foreground-window signal as the authority when it is granted, and `BlockOverlayController` gives each covered picture its own window — added through the accessibility service so it can be opaque and still let touches through — holding a blurred copy of it (`ImageBlur.blurPreview`) and nothing else. Covering the individual failing pictures is the default; whole-screen and cover-people are the other two modes. |
+| Video blurring | `ScreenAnalysisService` samples frames through `MediaProjection`. `ScreenRegions` finds the picture-shaped parts of the frame, `FrameScanner` classifies each one separately, `CoverPolicy` decides which covers stay up, `VerdictStability` keeps one picture's verdict steady across the frames it appears in, `RowProfile` measures how far the page moved so the covers move with it — or, where the app in front reports its own scroll through the accessibility service, `ScrollLedger` says exactly how far — `SceneSignature` decides whether it is still the same screen at all, with the accessibility service's foreground-window signal as the authority when it is granted, and `BlockOverlayController` gives each covered picture its own window — added through the accessibility service so it can be opaque and still let touches through — holding a blurred copy of it (`ImageBlur.blurPreview`) and nothing else. Covering the individual failing pictures is the default; whole-screen and cover-people are the other two modes. A browser's private tab cannot be captured at all, so it is handed to `PrivateTabGuard` (rule 31). |
 | Internet pause | `InternetPauseController` switches `ChildSafetyVpnService` into `TunnelMode.PAUSED`: a default route with nothing forwarded. Persisted before it is applied, restored on boot, and read back by the tunnel on every start (`TunnelMode.restingFor`). `MonitoringService` re-applies a pause the tunnel lost, shows the child a paused notice over network-dependent apps, and alerts the parent when the pause cannot be put back. One tap from the dashboard and from Controls. |
 
 ## Sprint 0 additions
@@ -134,6 +134,17 @@ follows is where to look.
   `ModelIdentity.purposeTrained` stays false and the general labeller keeps judging as a declared
   proxy. `assets/README-content-model.md` says what to drop in, and why the covering loop is the
   one place a hosted vision model does not belong.
+
+- **`data/source/BundledHostLists.kt`**, **`HostSet.kt`**, **`platform/network/AdultHostKeywords.kt`**
+  — real category coverage for the adult and violence categories. The list is StevenBlack's porn
+  extension (MIT and CC BY 4.0 sources, attributed in `assets/blocklists/NOTICE.txt`); the keyword
+  rules are ported from BlockNSFW. Measured against UT1's adult category crossed with the Tranco
+  top million, popular adult sites caught went from 0.5% to about 72%. `HostSet` exists because
+  testing every rule per lookup costs milliseconds at this size on the DNS path. Entries that
+  over-reach (CDNs, general hosts, sites that are not adult) are in `NEVER_BLOCK`, and
+  `BundledHostListsTest` holds the popular and system hosts that must never be refused. Never
+  bundle a list without checking it against the most-visited sites first: BlockNSFW's larger
+  list was measured refusing 110 of the top 10k, including a CDN and a country's government.
 
 ## Rules this codebase follows
 
@@ -372,6 +383,30 @@ that lies to a parent.
     pause back when no restart happens at all. A start the posture has no tunnel for calls
     `startForeground` before standing down, because a foreground-service start that never does is
     a crash.
+
+31. **A picture nobody could look at is never shown.** A browser's private or incognito tab marks
+    its window FLAG_SECURE, and Android blacks it out of every capture — MediaProjection and the
+    accessibility screenshot alike — so no picture in it can be judged. Driven on a realme RMX3870,
+    Android 16: `dumpsys window` shows `fl=… SECURE`, a screenshot is solid black, and the capture
+    loop had nothing to cover. Covering only what fails would cover nothing behind a switch that
+    reads as on, so the parent chooses (`PrivateTabAction`, default cover every picture) between
+    covering every picture and not allowing private tabs. Recognising one takes two signals
+    (`PrivateTabTracker`): the frame is black outside this app's own covers (`SecureFrame`), *and*
+    the app that owns the active window is a browser — a bank or a streaming app is black too, and
+    a dark-theme page is not. The black test leaves out every place a private-tab cover has been
+    since shortly before the frame was captured, because the capture shows covers late and a held
+    frame is older still (rules 17 and 28); it enters at 97% black and leaves only below 90% on
+    evidence that holds for 400 ms, because each looser version was measured dropping every cover
+    — once mid-scroll, once on a page nobody touched. `PrivateTabGuard` then works from the
+    accessibility tree, which a secure window does not hide: the whole page is covered at once,
+    `ImageRegions` (ported from `blurtest2`) narrows it to one opaque patch per photo, patches follow
+    the browser's reported scroll, and a walk that cannot account for every photo leaves the page
+    covered. It runs on its own thread, because the service's own tree walks held a cover up by 370
+    ms on the main one. A browser left while private is covered again the moment it returns, not
+    when the capture next looks (measured 50-60 ms instead of 0.6-1.5 s). The active window is read
+    again 250 ms after a window change, because the event can arrive while the old window is still
+    active. The capture loop stands down while a private tab holds the screen. Only the browser's
+    package and a count reach the event log (rule 3).
 
 ## Testing
 

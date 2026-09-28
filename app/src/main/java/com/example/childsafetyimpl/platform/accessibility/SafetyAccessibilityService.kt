@@ -51,6 +51,7 @@ class SafetyAccessibilityService : AccessibilityService() {
     @Inject lateinit var aiMonitor: AiActivityMonitor
     @Inject lateinit var inventory: AppInventoryProvider
     @Inject lateinit var overlayController: BlockOverlayController
+    @Inject lateinit var privateTabGuard: PrivateTabGuard
 
     @Inject @ApplicationScope lateinit var scope: CoroutineScope
 
@@ -60,16 +61,25 @@ class SafetyAccessibilityService : AccessibilityService() {
     /** Stops a single stubborn screen producing a stream of back presses. */
     private var lastCloseAt = 0L
 
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val recheckActiveApp = Runnable { noteActiveApp() }
+
+    private fun noteActiveApp() {
+        runCatching { rootInActiveWindow?.packageName?.toString() }.getOrNull()
+            ?.let(signalStore::noteActiveApp)
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         connected = this
         signalStore.setConnected(true)
+        privateTabGuard.attach(this)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         val packageName = event.packageName?.toString() ?: return
-        if (packageName == this.packageName) return
+         if (packageName == this.packageName) return
 
         // How far the page moved, as the app doing the moving reports it, for the covers to follow.
         // Numbers only — a delta, a position, a time — and nothing else about the event or its
@@ -90,6 +100,7 @@ class SafetyAccessibilityService : AccessibilityService() {
                 delta = delta,
                 position = position,
             )
+            privateTabGuard.onEvent(event, packageName)
             return
         }
 
@@ -109,7 +120,18 @@ class SafetyAccessibilityService : AccessibilityService() {
         // which app owns it.
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             signalStore.noteForegroundWindow(packageName)
+            // Which app the child is actually using, which the keyboard's own window events would
+            // otherwise claim to be. One lookup per window change, not per content change.
+            noteActiveApp()
+            // And again once the switch has settled: the event can arrive while the window it
+            // announces is still animating in, and the active window is then still the old one.
+            // Measured on a realme RMX3870: pressing Home from Chrome reported Chrome as active.
+            mainHandler.removeCallbacks(recheckActiveApp)
+            mainHandler.postDelayed(recheckActiveApp, ACTIVE_APP_RECHECK_MILLIS)
         }
+
+        // Before the throttle: the private-tab covers have to keep up with the page.
+        privateTabGuard.onEvent(event, packageName)
 
         // Content-changed events arrive continuously while a feed scrolls. Throttling here is not
         // an optimisation: it is what keeps this service from becoming the battery cost that gets
@@ -256,6 +278,8 @@ class SafetyAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         if (connected === this) connected = null
+        mainHandler.removeCallbacks(recheckActiveApp)
+        privateTabGuard.detach()
         signalStore.setConnected(false)
         scope.launch { surfaceGuard.release() }
         super.onDestroy()
@@ -431,6 +455,9 @@ class SafetyAccessibilityService : AccessibilityService() {
         fun isConnected(): Boolean = connected != null
 
         private const val THROTTLE_MILLIS = 700L
+
+        /** How long after a window change the active window is read again; see noteActiveApp. */
+        private const val ACTIVE_APP_RECHECK_MILLIS = 250L
 
         /** What `scrollDeltaY` holds when the app did not say. */
         private const val UNDEFINED_SCROLL = -1

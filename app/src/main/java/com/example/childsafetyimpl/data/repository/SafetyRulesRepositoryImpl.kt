@@ -9,6 +9,8 @@ import com.example.childsafetyimpl.data.local.DomainRuleEntity
 import com.example.childsafetyimpl.data.local.WebCategoryDao
 import com.example.childsafetyimpl.data.local.WebCategorySettingEntity
 import com.example.childsafetyimpl.data.prefs.SafetyPreferences
+import com.example.childsafetyimpl.data.source.HostListSource
+import com.example.childsafetyimpl.data.source.HostSet
 import com.example.childsafetyimpl.di.IoDispatcher
 import com.example.childsafetyimpl.domain.model.AppCategory
 import com.example.childsafetyimpl.domain.model.AppRule
@@ -19,6 +21,7 @@ import com.example.childsafetyimpl.domain.model.RuleAction
 import com.example.childsafetyimpl.domain.model.RuleSource
 import com.example.childsafetyimpl.domain.model.WebCategory
 import com.example.childsafetyimpl.domain.repository.SafetyRulesRepository
+import com.example.childsafetyimpl.platform.network.AdultHostKeywords
 import com.example.childsafetyimpl.platform.network.SystemTrafficExemptions
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
@@ -37,6 +40,7 @@ class SafetyRulesRepositoryImpl @Inject constructor(
     private val domainRuleDao: DomainRuleDao,
     private val webCategoryDao: WebCategoryDao,
     private val preferences: SafetyPreferences,
+    private val hostLists: HostListSource,
     @param:IoDispatcher private val ioDispatcher: CoroutineDispatcher,
 ) : SafetyRulesRepository {
 
@@ -46,11 +50,11 @@ class SafetyRulesRepositoryImpl @Inject constructor(
      * Host evaluation runs on the VPN read loop and on the WebView interception thread, both of
      * which are latency-critical. Hitting the database per lookup would put disk I/O in the path
      * of every DNS query on the device, so the rules are cached and refreshed on write.
+     *
+     * The snapshot is replaced whole rather than field by field, so a lookup on another thread
+     * never sees new rules paired with old categories.
      */
-    private var cachedRules: List<DomainRuleEntity> = emptyList()
-    private var cachedBlockedCategories: Set<WebCategory> = emptySet()
-    private var cachedAllowListOnly: Boolean = false
-    private var cacheLoaded = false
+    @Volatile private var snapshot: FilterSnapshot? = null
     private val cacheMutex = Mutex()
 
     override fun observeAppRules(): Flow<List<AppRule>> =
@@ -129,10 +133,14 @@ class SafetyRulesRepositoryImpl @Inject constructor(
 
     override suspend fun refreshFilterCache() = cacheMutex.withLock {
         withContext(ioDispatcher) {
-            cachedRules = domainRuleDao.getEnabled()
-            cachedBlockedCategories = webCategoryDao.getBlocked().map { it.category }.toSet()
-            cachedAllowListOnly = preferences.settings.first().allowListOnlyBrowsing
-            cacheLoaded = true
+            val rules = domainRuleDao.getEnabled()
+            snapshot = FilterSnapshot(
+                rulesByPattern = rules.withIndex().groupBy { it.value.pattern },
+                blockedCategories = webCategoryDao.getBlocked().map { it.category }.toSet(),
+                allowListOnly = preferences.settings.first().allowListOnlyBrowsing,
+                // Read from assets once per process; later refreshes reuse the parsed lists.
+                hostLists = snapshot?.hostLists ?: hostLists.load(),
+            )
         }
     }
 
@@ -142,17 +150,18 @@ class SafetyRulesRepositoryImpl @Inject constructor(
      * An explicit parent allow beats everything, so a parent can always carve out an exception to
      * a category. An explicit block comes next. Category rules apply only after both, and
      * allow-list-only mode is checked last because it is the most restrictive posture and should
-     * not silently override a rule the parent set by hand.
+     * not silently override a rule the parent set by hand. The bundled lists count as category
+     * rules, after the ones in the database.
      */
     override suspend fun evaluateHost(host: String): FilterVerdict {
-        if (!cacheLoaded) refreshFilterCache()
+        val cache = snapshot ?: run { refreshFilterCache(); snapshot!! }
 
         val normalised = normaliseHost(host)
         if (normalised.isBlank()) {
             return FilterVerdict(host, true, null, null, "Empty host, nothing to evaluate.")
         }
 
-        val matches = cachedRules.filter { hostMatches(normalised, it.pattern) }
+        val matches = cache.rulesMatching(normalised)
 
         matches.firstOrNull { it.action == RuleAction.ALLOW && it.source == RuleSource.PARENT }
             ?.let {
@@ -176,7 +185,7 @@ class SafetyRulesRepositoryImpl @Inject constructor(
                 )
             }
 
-        matches.firstOrNull { it.action == RuleAction.BLOCK && it.category in cachedBlockedCategories }
+        matches.firstOrNull { it.action == RuleAction.BLOCK && it.category in cache.blockedCategories }
             ?.let {
                 return FilterVerdict(
                     host = normalised,
@@ -187,9 +196,11 @@ class SafetyRulesRepositoryImpl @Inject constructor(
                 )
             }
 
+        cache.bundledBlock(normalised)?.let { return it }
+
         // Unlisted, but plumbing the phone needs to keep working. Checked only here, after the
         // parent's own rules and the categories, so it can never undo a block they chose.
-        if (cachedAllowListOnly && SystemTrafficExemptions.isExempt(normalised)) {
+        if (cache.allowListOnly && SystemTrafficExemptions.isExempt(normalised)) {
             return FilterVerdict(
                 host = normalised,
                 allowed = true,
@@ -199,7 +210,7 @@ class SafetyRulesRepositoryImpl @Inject constructor(
             )
         }
 
-        if (cachedAllowListOnly) {
+        if (cache.allowListOnly) {
             return FilterVerdict(
                 host = normalised,
                 allowed = false,
@@ -220,14 +231,35 @@ class SafetyRulesRepositoryImpl @Inject constructor(
     }
 
     /**
-     * Suffix matching on label boundaries.
+     * The bundled lists and adult-name keywords, for the categories the parent has switched on.
      *
-     * A plain contains check would block "notpornhub-safety.org" along with the real thing, and a
-     * plain equals check would miss every subdomain. Matching on the dot boundary is what makes a
-     * single entry cover a site without spilling onto unrelated names.
+     * A host the phone itself depends on is never refused from here. A parent's own block can
+     * still reach it, as before; a list nobody on this device wrote cannot.
      */
-    private fun hostMatches(host: String, pattern: String): Boolean =
-        host == pattern || host.endsWith(".$pattern")
+    private fun FilterSnapshot.bundledBlock(host: String): FilterVerdict? {
+        if (SystemTrafficExemptions.isExempt(host)) return null
+        for (category in blockedCategories) {
+            val entry = hostLists[category]?.matchOf(host) ?: continue
+            return FilterVerdict(
+                host = host,
+                allowed = false,
+                matchedPattern = entry,
+                category = category,
+                reason = "The ${category.label} category is switched on.",
+            )
+        }
+        if (WebCategory.ADULT in blockedCategories && AdultHostKeywords.matchOf(host) != null) {
+            return FilterVerdict(
+                host = host,
+                allowed = false,
+                matchedPattern = null,
+                category = WebCategory.ADULT,
+                reason = "The ${WebCategory.ADULT.label} category is switched on, and this " +
+                    "site's name is an adult one.",
+            )
+        }
+        return null
+    }
 
     private fun normaliseHost(raw: String): String = raw
         .trim()
@@ -257,3 +289,32 @@ private fun DomainRuleEntity.toDomain() = DomainRule(
     source = source,
     enabled = enabled,
 )
+
+private class FilterSnapshot(
+    val rulesByPattern: Map<String, List<IndexedValue<DomainRuleEntity>>>,
+    val blockedCategories: Set<WebCategory>,
+    val allowListOnly: Boolean,
+    val hostLists: Map<WebCategory, HostSet>,
+) {
+    /**
+     * Suffix matching on label boundaries, in the order the rules were stored.
+     *
+     * A plain contains check would block "notpornhub-safety.org" along with the real thing, and a
+     * plain equals check would miss every subdomain. Matching on the dot boundary is what makes a
+     * single entry cover a site without spilling onto unrelated names. Looking up the host and
+     * each suffix after a dot finds exactly the rules `host == p || host.endsWith(".$p")` would,
+     * without testing every rule on every lookup.
+     */
+    fun rulesMatching(host: String): List<DomainRuleEntity> {
+        if (rulesByPattern.isEmpty()) return emptyList()
+        val found = mutableListOf<IndexedValue<DomainRuleEntity>>()
+        var start = 0
+        while (true) {
+            rulesByPattern[host.substring(start)]?.let(found::addAll)
+            val dot = host.indexOf('.', start)
+            if (dot < 0) break
+            start = dot + 1
+        }
+        return if (found.size < 2) found.map { it.value } else found.sortedBy { it.index }.map { it.value }
+    }
+}

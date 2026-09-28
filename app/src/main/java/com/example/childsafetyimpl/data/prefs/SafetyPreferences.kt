@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.childsafetyimpl.core.protection.ProtectionFeature
 import com.example.childsafetyimpl.platform.content.BlurMode
+import com.example.childsafetyimpl.platform.content.PrivateTabAction
 import com.example.childsafetyimpl.platform.content.ProtectionLevel
 import com.example.childsafetyimpl.platform.content.SubjectCategory
 import com.example.childsafetyimpl.platform.content.ValuesCategory
@@ -108,6 +109,12 @@ data class SafetySettings(
      * therefore the only one whose behaviour can be promised.
      */
     val blurSubjects: Set<SubjectCategory> = setOf(SubjectCategory.PERSON),
+
+    /**
+     * What video blurring does about a browser's private tab, which no app can capture and so none
+     * can judge. See PrivateTabAction.
+     */
+    val privateTabAction: PrivateTabAction = PrivateTabAction.default,
 
     /**
      * Forces SafeSearch for every app by answering search-engine lookups with the filtered
@@ -219,6 +226,7 @@ open class SafetyPreferences(private val context: Context) {
         val blurCategories = stringSetPreferencesKey("blur_categories")
         val blurMode = stringPreferencesKey("blur_mode")
         val blurSubjects = stringSetPreferencesKey("blur_subjects")
+        val privateTabAction = stringPreferencesKey("private_tab_action")
 
         val safeSearch = booleanPreferencesKey("safe_search")
         val searchTermGuard = booleanPreferencesKey("search_term_guard")
@@ -310,6 +318,9 @@ open class SafetyPreferences(private val context: Context) {
                     ?.mapNotNull { stored -> SubjectCategory.entries.firstOrNull { it.name == stored } }
                     ?.toSet()
                     ?: setOf(SubjectCategory.PERSON),
+                privateTabAction = prefs[Keys.privateTabAction]
+                    ?.let { stored -> PrivateTabAction.entries.firstOrNull { it.name == stored } }
+                    ?: PrivateTabAction.default,
                 lastKnownGrants = prefs[Keys.lastKnownGrants] ?: emptySet(),
                 lastMonitorHeartbeat = prefs[Keys.lastHeartbeat] ?: 0L,
             )
@@ -411,6 +422,10 @@ open class SafetyPreferences(private val context: Context) {
 
     open suspend fun setBlurMode(mode: BlurMode) {
         context.safetyDataStore.edit { it[Keys.blurMode] = mode.name }
+    }
+
+    open suspend fun setPrivateTabAction(action: PrivateTabAction) {
+        context.safetyDataStore.edit { it[Keys.privateTabAction] = action.name }
     }
 
     open suspend fun setBlurSubjects(subjects: Set<SubjectCategory>) {

@@ -21,6 +21,14 @@ enum class RestrictedSurface(val label: String, val childFacingName: String) {
      * not allowanced: "fifteen minutes of searching for drugs a day" is not a product.
      */
     WEB_SEARCH("Restricted search", "Searches like that"),
+
+    /**
+     * A browser's private or incognito tab, when the parent has chosen not to allow them.
+     *
+     * Handled by PrivateTabGuard, not by a screen signature: a private tab is recognised because
+     * screen capture goes black while a browser is in front, which no view id could say.
+     */
+    PRIVATE_BROWSING("Private browsing", "Private tabs"),
 }
 
 /** How a duplicate app instance came to exist. */

@@ -120,7 +120,9 @@ class SurfaceGuard @Inject constructor(
             // The AI surface is observed rather than refused. Its limit is a time budget, which
             // the monitoring service enforces at the app level.
             // Judged by SearchTermGuard, which reads the search rather than the screen.
+            // Handled by PrivateTabGuard, from the capture going black rather than a signature.
             RestrictedSurface.WEB_SEARCH,
+            RestrictedSurface.PRIVATE_BROWSING,
             RestrictedSurface.AI_CONVERSATION,
             RestrictedSurface.CLONE_WORKSPACE,
             -> false

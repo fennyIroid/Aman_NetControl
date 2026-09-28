@@ -3,6 +3,8 @@ package com.example.childsafetyimpl.di
 import com.example.childsafetyimpl.data.repository.CommunicationRepositoryImpl
 import com.example.childsafetyimpl.data.repository.SafetyEventRepositoryImpl
 import com.example.childsafetyimpl.data.repository.SafetyRulesRepositoryImpl
+import com.example.childsafetyimpl.data.source.BundledHostLists
+import com.example.childsafetyimpl.data.source.HostListSource
 import com.example.childsafetyimpl.domain.repository.CommunicationRepository
 import com.example.childsafetyimpl.domain.repository.SafetyEventRepository
 import com.example.childsafetyimpl.domain.repository.SafetyRulesRepository
@@ -21,6 +23,9 @@ abstract class RepositoryModule {
 
     @Binds @Singleton
     abstract fun bindSafetyRulesRepository(impl: SafetyRulesRepositoryImpl): SafetyRulesRepository
+
+    @Binds @Singleton
+    abstract fun bindHostListSource(impl: BundledHostLists): HostListSource
 
     @Binds @Singleton
     abstract fun bindCommunicationRepository(impl: CommunicationRepositoryImpl): CommunicationRepository

@@ -1,0 +1,22 @@
+Bundled host lists: sources and licences
+=======================================
+
+adult-hosts.txt and violence-hosts.txt are generated from the "porn" extension of
+StevenBlack/hosts (https://github.com/StevenBlack/hosts, MIT), fetched 2026-09-24 from
+https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/porn-only/hosts
+
+That extension merges the following sources, each under its own licence:
+
+  hostsVN adult (bigdargon)          https://github.com/bigdargon/hostsVN               MIT
+  pornhosts (Clefspeare13)            https://github.com/Clefspeare13/pornhosts          MIT
+  Sinfonietta pornography hosts       https://github.com/Sinfonietta/hostfiles           MIT
+  Sinfonietta snuff hosts             https://github.com/Sinfonietta/hostfiles           MIT
+  brijrajparmar27 host-sources Porn   https://github.com/brijrajparmar27/host-sources    CC BY 4.0
+  tiuxo hosts - pornography           https://github.com/tiuxo/hosts                     CC BY 4.0
+
+The CC BY 4.0 sources require attribution, which this file provides. The lists were changed:
+leading "www." was removed, entries were de-duplicated, the snuff section was split into
+violence-hosts.txt, and the entries named in BundledHostLists.NEVER_BLOCK were left out.
+
+The adult-hostname keyword rules in platform/network/AdultHostKeywords.kt are ported from
+BlockNSFW (https://github.com/codepurse/BlockNSFW, shared/host-keywords.js), MIT.

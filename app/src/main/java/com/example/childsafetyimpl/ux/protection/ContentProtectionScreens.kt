@@ -32,6 +32,7 @@ import com.example.childsafetyimpl.navigation.HandleNavigation
 import com.example.childsafetyimpl.navigation.LocalNavController
 import com.example.childsafetyimpl.platform.content.BlurLatency
 import com.example.childsafetyimpl.platform.content.BlurMode
+import com.example.childsafetyimpl.platform.content.PrivateTabAction
 import com.example.childsafetyimpl.platform.content.DetectionQuality
 import com.example.childsafetyimpl.platform.content.ProtectionLevel
 import com.example.childsafetyimpl.platform.content.ValuesCategory
@@ -344,6 +345,29 @@ fun VideoBlurringScreen(viewModel: VideoBlurringViewModel) {
                 color = SafetyPalette.Slate,
             )
 
+            // Private tabs cannot be captured at all, so none of the choices above can apply to
+            // them. This is what happens instead, and it is the parent's choice (rule 18).
+            Spacer(Modifier.height(18.dp))
+            Text(
+                text = "Private and incognito tabs",
+                style = MaterialTheme.typography.titleSmall,
+                color = SafetyPalette.Ink,
+            )
+            Spacer(Modifier.height(8.dp))
+            PrivateTabAction.entries.forEach { action ->
+                FilterPill(
+                    text = action.label,
+                    selected = state.privateTabAction == action,
+                    onClick = { viewModel.onEvent(VideoBlurringUiEvent.SetPrivateTabAction(action)) },
+                )
+                Spacer(Modifier.height(6.dp))
+            }
+            Text(
+                text = state.privateTabAction.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = SafetyPalette.Slate,
+            )
+
             if (state.blurMode != BlurMode.SUBJECTS) {
                 // The control that decides whether anything gets covered at all, and until now it
                 // existed only in storage: the classifier read it, enforcement obeyed it, and no
@@ -590,6 +614,14 @@ fun VideoBlurringScreen(viewModel: VideoBlurringViewModel) {
                 "An app that marks its window secure, such as a banking app or a streaming " +
                     "service, captures as pure black. Those frames are counted separately rather " +
                     "than reported as safe.",
+            )
+            BulletLine(
+                "A browser's private or incognito tab is secure in the same way, so no picture in " +
+                    "it can be checked. Instead every picture is covered, or the tab is not " +
+                    "allowed, as chosen above. Covers are plain panels rather than blurred, since " +
+                    "there is nothing to blur. This needs the accessibility service as well as a " +
+                    "running session, and a picture that loads mid-scroll can show for a moment " +
+                    "before its cover arrives.",
             )
             BulletLine(
                 "Each picture on screen is judged on its own, so one image can be covered while " +

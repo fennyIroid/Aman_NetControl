@@ -31,7 +31,10 @@ import com.example.childsafetyimpl.data.prefs.SafetyPreferences
 import com.example.childsafetyimpl.data.prefs.SafetySettings
 import com.example.childsafetyimpl.platform.content.BlurLatency
 import com.example.childsafetyimpl.platform.content.BlurMode
+import com.example.childsafetyimpl.platform.accessibility.BrowserSurfaces
 import com.example.childsafetyimpl.platform.accessibility.ScreenSignalStore
+import com.example.childsafetyimpl.platform.content.PrivateTabTracker
+import com.example.childsafetyimpl.platform.content.SecureFrame
 import com.example.childsafetyimpl.platform.content.CoverPolicy
 import com.example.childsafetyimpl.platform.content.FrameMotion
 import com.example.childsafetyimpl.platform.content.FrameScanner
@@ -43,6 +46,7 @@ import com.example.childsafetyimpl.platform.content.SubjectDetector
 import com.example.childsafetyimpl.platform.enforcement.BlockOverlayController
 import com.example.childsafetyimpl.ui.block.CoveredPatch
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.graphics.get
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -236,6 +240,12 @@ class ScreenAnalysisService : Service() {
 
     /** The display's height in pixels, which is what the app's scroll reports are measured in. */
     @Volatile private var screenHeightPx = 1
+
+    /** Whether a browser's private tab is in front; see notePrivateTab. */
+    private val privateTabs = PrivateTabTracker()
+
+    /** The display's width in pixels, for placing the private-tab covers on the frame. */
+    @Volatile private var screenWidthPx = 1
     @Volatile private var settlingUntil = 0L
 
     /**
@@ -373,6 +383,7 @@ class ScreenAnalysisService : Service() {
 
         val metrics = displayMetrics()
         screenHeightPx = metrics.heightPixels.coerceAtLeast(1)
+        screenWidthPx = metrics.widthPixels.coerceAtLeast(1)
         coversAnchoredScroll = signalStore.scroll.total()
         // Capturing at a fraction of screen resolution. Full resolution is not needed for a
         // classification verdict and is the single largest cost in the pipeline.
@@ -436,7 +447,14 @@ class ScreenAnalysisService : Service() {
         val dueForTracking = patches.isNotEmpty() &&
             now - lastTrackAt >= (1000 / TRACK_FPS)
 
-        if (analysisInFlight || (!dueForFull && !dueForTracking)) {
+        // A browser in front is checked for a private tab at the tracking rate rather than the
+        // classifying one. The check is a thousand pixels; waiting for the next full pass would
+        // leave a private tab's pictures on screen for up to half a second before anything
+        // covered them.
+        val dueForPrivateCheck = dueForPrivateCheckSoon() &&
+            now - lastTrackAt >= (1000 / TRACK_FPS)
+
+        if (analysisInFlight || (!dueForFull && !dueForTracking && !dueForPrivateCheck)) {
             // Put off, not dropped: this may be the last frame the screen produces. Looked at
             // when the loop is free or the next pass is due, whichever this is waiting for, unless
             // a newer frame arrives first and takes its place.
@@ -447,7 +465,7 @@ class ScreenAnalysisService : Service() {
                 BUSY_RETRY_MILLIS
             } else {
                 val untilFull = lastSampleAt + 1000 / TARGET_FPS - now
-                val untilTrack = if (patches.isNotEmpty()) {
+                val untilTrack = if (patches.isNotEmpty() || dueForPrivateCheckSoon()) {
                     lastTrackAt + 1000 / TRACK_FPS - now
                 } else {
                     untilFull
@@ -489,6 +507,19 @@ class ScreenAnalysisService : Service() {
 
         scope.launch {
             try {
+                // A browser's private tab is a secure window too, and the one secure window this
+                // protection is still answerable for: nothing in it can be judged, so it is handed
+                // to the accessibility service, which can find its pictures without seeing them.
+                // While it holds the screen this loop judges nothing — there is nothing to judge,
+                // and the capture would show that service's covers (rule 17).
+                if (notePrivateTab(bitmap, frameTime)) {
+                    if (dueForFull) State.recordBlankFrame()
+                    standDownForPrivateTab()
+                    return@launch
+                }
+                // Brought forward only to look for a private tab, and there is none.
+                if (!dueForFull && !dueForTracking) return@launch
+
                 // A FLAG_SECURE window mirrors as pure black. Detecting that before classifying
                 // is what separates "nothing unsafe here" from "we were not allowed to look".
                 if (bitmap.isEffectivelyBlank()) {
@@ -749,6 +780,60 @@ class ScreenAnalysisService : Service() {
             },
             strength = settings.blurStrength,
         )
+    }
+
+    private fun dueForPrivateCheckSoon(): Boolean =
+        BrowserSurfaces.isBrowser(signalStore.activeApp.value)
+
+    /**
+     * Whether a browser's private tab is in front, deciding it from this frame and publishing any
+     * change. See PrivateTabTracker for why both a browser and a black window are needed, and
+     * SecureFrame for why the private-tab covers are left out of the test.
+     */
+    private fun notePrivateTab(bitmap: Bitmap, frameTime: Long): Boolean {
+        val app = signalStore.activeApp.value
+        val sx = bitmap.width.toFloat() / screenWidthPx
+        val sy = bitmap.height.toFloat() / screenHeightPx
+        val ignore = signalStore.recentPrivateCovers(frameTime).map { it.scaled(sx, sy) }
+        val blackedOut = SecureFrame.isBlackedOut(bitmap.width, bitmap.height, ignore) { x, y ->
+            val pixel = bitmap[x, y]
+            (android.graphics.Color.red(pixel) +
+                android.graphics.Color.green(pixel) +
+                android.graphics.Color.blue(pixel)) / 3
+        }
+        // The store can end a tab on its own when another app comes into use, and start one when
+        // the child returns to a browser they left while it was private; the tracker follows both.
+        val published = signalStore.privateTab.value
+        if (published == null && privateTabs.current != null) privateTabs.reset()
+        if (published != null && privateTabs.current != published) privateTabs.adopt(published)
+        val next = privateTabs.next(
+            foreground = app,
+            foregroundIsBrowser = BrowserSurfaces.isBrowser(app),
+            blackedOut = blackedOut,
+            now = SystemClock.uptimeMillis(),
+        )
+        if (next != signalStore.privateTab.value) {
+            if (BuildConfig.DEBUG) {
+                Log.d(TAG, "private tab $published -> $next: app=$app blackedOut=$blackedOut " +
+                    "ignoring ${ignore.size} covers")
+            }
+            signalStore.setPrivateTab(next)
+        }
+        return next != null
+    }
+
+    /**
+     * Takes this loop's own covers down and forgets the screen, so nothing it placed on the
+     * normal tab stands over the private one, and the tab it returns to is met afresh.
+     */
+    private fun standDownForPrivateTab() {
+        if (activeCovers.isNotEmpty() || patches.isNotEmpty() || drawnRegions.isNotEmpty()) {
+            activeCovers = emptyList()
+            clearCovers(drawnStrength)
+        }
+        lastLayout = null
+        lastSignature = null
+        lastProfile = null
     }
 
     private fun clearCovers(strength: Float) {
@@ -1136,7 +1221,10 @@ class ScreenAnalysisService : Service() {
     /** Everything the session holds, released in an order that cannot leave the screen covered. */
     private fun releaseSession() {
         // A stopped session must never leave the screen covered with nothing running to lift it.
+        // That includes the private-tab covers: nothing would be left to say the tab had closed.
         overlayController.clearCover()
+        signalStore.setPrivateTab(null)
+        privateTabs.reset()
         activeCovers = emptyList()
         lastSignature = null
         lastProfile = null

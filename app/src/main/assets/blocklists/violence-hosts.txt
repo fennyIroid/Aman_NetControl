@@ -1,0 +1,15 @@
+# Bundled violence and gore host list. One host per line; a host also covers its subdomains.
+# Generated from StevenBlack/hosts alternates/porn-only (fetched 2026-09-24), the "Snuff hosts" section (Sinfonietta).
+# Sources and licences: blocklists/NOTICE.txt. Entries left out on purpose are listed in
+# BundledHostLists.NEVER_BLOCK, which also holds at load time. Regenerate rather than hand-edit.
+crazypain.com
+deathandreality.com
+devilpain.com
+documentingreality.com
+elblogdelnarco.com
+gorebrasil.com
+goreforum.com
+ogrish.tv
+sadovids.com
+thepinsta.com
+vidmax.com

@@ -2,7 +2,11 @@ package com.example.childsafetyimpl.domain.model
 
 /** Content groupings a parent can switch on without naming individual sites. */
 enum class WebCategory(val label: String, val description: String) {
-    ADULT("Adult content", "Explicit and pornographic destinations."),
+    ADULT(
+        "Adult content",
+        "Explicit and pornographic sites: about 64,000 from public lists, plus names that are " +
+            "plainly adult. Well-known sites are covered; obscure and brand-new ones often are not.",
+    ),
     GAMBLING("Gambling", "Betting, casino and wagering destinations."),
     VIOLENCE("Violence & gore", "Graphic violence and shock content."),
     MALWARE("Malware & scams", "Known malicious and phishing destinations."),
