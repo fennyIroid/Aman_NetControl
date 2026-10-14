@@ -22,6 +22,8 @@ import com.example.childsafetyimpl.domain.model.RuleSource
 import com.example.childsafetyimpl.domain.model.WebCategory
 import com.example.childsafetyimpl.domain.repository.SafetyRulesRepository
 import com.example.childsafetyimpl.platform.network.AdultHostKeywords
+import com.example.childsafetyimpl.platform.network.DirectAddress
+import com.example.childsafetyimpl.platform.network.ProxyOrigin
 import com.example.childsafetyimpl.platform.network.SystemTrafficExemptions
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
@@ -152,11 +154,17 @@ class SafetyRulesRepositoryImpl @Inject constructor(
      * allow-list-only mode is checked last because it is the most restrictive posture and should
      * not silently override a rule the parent set by hand. The bundled lists count as category
      * rules, after the ones in the database.
+     *
+     * Two ways round a resolver are closed between the parent's rules and the categories: a
+     * public address opened directly, and a relay carrying a site the rules would refuse. Both
+     * come after the parent's rules, so a parent can still allow an address or a relay by hand.
      */
     override suspend fun evaluateHost(host: String): FilterVerdict {
         val cache = snapshot ?: run { refreshFilterCache(); snapshot!! }
 
-        val normalised = normaliseHost(host)
+        val literal = DirectAddress.fromHost(host)
+        // normaliseHost cuts at the first colon, which is the whole of an IPv6 address.
+        val normalised = if (literal?.form == DirectAddress.Form.IPV6) literal.address else normaliseHost(host)
         if (normalised.isBlank()) {
             return FilterVerdict(host, true, null, null, "Empty host, nothing to evaluate.")
         }
@@ -184,6 +192,28 @@ class SafetyRulesRepositoryImpl @Inject constructor(
                     reason = "Blocked explicitly by the parent.",
                 )
             }
+
+        val filtering = cache.blockedCategories.isNotEmpty() || cache.allowListOnly
+        if (filtering && literal != null && literal.isPublic) {
+            return FilterVerdict(
+                host = normalised,
+                allowed = false,
+                matchedPattern = null,
+                category = null,
+                reason = "Opened by its address (${literal.address}) rather than its name, " +
+                    "which no DNS filter can see. Private network addresses are not affected.",
+            )
+        }
+
+        ProxyOrigin.fromHost(normalised)?.let { origin ->
+            val carried = evaluateHost(origin)
+            if (!carried.allowed) {
+                return carried.copy(
+                    host = normalised,
+                    reason = "A relay serving $origin under another name. ${carried.reason}",
+                )
+            }
+        }
 
         matches.firstOrNull { it.action == RuleAction.BLOCK && it.category in cache.blockedCategories }
             ?.let {

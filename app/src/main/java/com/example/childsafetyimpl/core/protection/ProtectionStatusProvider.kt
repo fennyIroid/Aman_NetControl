@@ -10,7 +10,7 @@ import com.example.childsafetyimpl.platform.accessibility.SurfaceGuard
 import com.example.childsafetyimpl.platform.ai.AiActivityMonitor
 import com.example.childsafetyimpl.platform.browser.SafeBrowserEngine
 import com.example.childsafetyimpl.platform.clone.CloneGuard
-import com.example.childsafetyimpl.platform.network.ChildSafetyVpnService
+import com.example.childsafetyimpl.platform.network.PrivateDnsGuard
 import com.example.childsafetyimpl.platform.network.VpnGuard
 import com.example.childsafetyimpl.platform.permission.PermissionInspector
 import com.example.childsafetyimpl.platform.projection.ScreenAnalysisService
@@ -45,6 +45,7 @@ class ProtectionStatusProvider @Inject constructor(
     private val aiMonitor: AiActivityMonitor,
     private val browserEngine: SafeBrowserEngine,
     private val youTubeSurface: YouTubeSurface,
+    private val privateDnsGuard: PrivateDnsGuard,
 ) {
 
     /** Live status for every protection, recomputed whenever settings or live counters change. */
@@ -146,8 +147,11 @@ class ProtectionStatusProvider @Inject constructor(
     ): String = when (feature) {
         ProtectionFeature.VPN_RESTRICTION -> {
             val posture = vpnGuard.posture.value
+            val refused = vpnGuard.refusedRequests.value
             when {
                 posture.foreignTunnelActive -> "A VPN is running now"
+                refused == 1 -> "1 VPN request refused"
+                refused > 1 -> "$refused VPN requests refused"
                 posture.installedVpnApps.isEmpty() -> "No VPN apps installed"
                 else -> "${posture.installedVpnApps.size} VPN apps watched"
             }
@@ -174,21 +178,18 @@ class ProtectionStatusProvider @Inject constructor(
         ProtectionFeature.APP_RESTRICTION -> "Watching every app"
 
         ProtectionFeature.SEARCH_FILTERING -> {
-            val forced = ChildSafetyVpnService.State.counters.value.safeSearchForced
             val closed = searchGuard.blockedToday.value
             when {
                 closed == 1 -> "1 search closed"
                 closed > 1 -> "$closed searches closed"
-                forced > 0 -> "SafeSearch forced $forced times"
-                else -> "SafeSearch enforced"
+                else -> "Filtering through Private DNS"
             }
         }
 
         ProtectionFeature.AD_REMOVAL -> {
-            val tunnel = ChildSafetyVpnService.State.counters.value.adsBlocked
             val browser = browserEngine.stats.value.adsBlocked
             val player = youTubeSurface.stats.value.adsBlocked
-            val total = tunnel + browser + player
+            val total = browser + player
             if (total == 0) "Ready" else "$total ads removed"
         }
 
@@ -210,9 +211,20 @@ class ProtectionStatusProvider @Inject constructor(
     private fun detailFor(feature: ProtectionFeature, settings: SafetySettings): String =
         when (feature) {
             ProtectionFeature.VPN_RESTRICTION -> buildString {
-                append("VPN apps are closed on open")
-                if (settings.reclaimTunnel) append(" and the tunnel is taken back")
-                append(".")
+                append(
+                    if (settings.blockVpnApps) {
+                        "VPN connection requests are refused and VPN apps are closed on open"
+                    } else {
+                        "VPN apps are allowed to open"
+                    },
+                )
+                append(
+                    if (settings.vpnLockout) {
+                        ". While another VPN is on, only Settings and the phone can be used."
+                    } else {
+                        ". A VPN that connects anyway is reported, not blocked."
+                    },
+                )
             }
 
             ProtectionFeature.CLONE_CONTROL ->
@@ -238,10 +250,17 @@ class ProtectionStatusProvider @Inject constructor(
             }
 
             ProtectionFeature.SEARCH_FILTERING -> buildString {
-                if (settings.safeSearchEnabled) {
-                    append("SafeSearch is forced for every browser on the device")
-                } else {
-                    append("SafeSearch forcing is switched off")
+                // Read live, because the setting is the filter and a card that described the
+                // parent's choice rather than the device would claim filtering that is not there.
+                when (val posture = privateDnsGuard.currentPosture()) {
+                    is PrivateDnsGuard.Posture.Filtering -> {
+                        val resolver = PrivateDnsGuard.resolverFor(posture.host)
+                        append("Every app is filtered through ${resolver?.label ?: posture.host}")
+                        if (resolver?.forcesSafeSearch == true) append(", which forces SafeSearch")
+                    }
+                    else -> append(
+                        "Private DNS is not pointed at a filter, so other apps are not filtered",
+                    )
                 }
                 append(if (settings.searchTermGuardEnabled) {
                     ", and a restricted search closes the browser."
@@ -254,8 +273,7 @@ class ProtectionStatusProvider @Inject constructor(
                 "A blocked app is closed each time it is opened, usually within two seconds."
 
             ProtectionFeature.AD_REMOVAL ->
-                "Ads are removed in the built-in player and browser" +
-                    if (ChildSafetyVpnService.State.running.value) ", and device-wide." else "."
+                "Ads are removed in the built-in player and browser. Other apps keep theirs."
 
             ProtectionFeature.IMAGE_BLURRING ->
                 "Images are scored before the page receives them, at " +

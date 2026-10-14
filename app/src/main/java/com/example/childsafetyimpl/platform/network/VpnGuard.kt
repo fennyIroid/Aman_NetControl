@@ -5,41 +5,55 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
+import android.os.SystemClock
+import com.example.childsafetyimpl.core.protection.ProtectionFeature
 import com.example.childsafetyimpl.data.prefs.SafetyPreferences
+import com.example.childsafetyimpl.data.source.KnownPackages
 import com.example.childsafetyimpl.domain.model.EventAction
 import com.example.childsafetyimpl.domain.model.EventSeverity
 import com.example.childsafetyimpl.domain.model.InstalledApp
 import com.example.childsafetyimpl.domain.model.SafetyEventType
 import com.example.childsafetyimpl.domain.model.VpnPosture
 import com.example.childsafetyimpl.domain.repository.SafetyEventRepository
+import com.example.childsafetyimpl.platform.admin.NetworkLockdown
 import com.example.childsafetyimpl.platform.usage.AppInventoryProvider
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * VPN restriction (first-priority protection).
+ * VPN restriction (first-priority protection), without a VPN of our own.
  *
- * A consumer app cannot forbid another app from asking for a tunnel, so this guard restricts VPN
- * use through the three routes Android does leave open, and runs all three together because each
- * one alone is escapable:
+ * Filtering runs through Private DNS, so this app does not hold the device's VPN slot and cannot
+ * end another VPN by taking it back. A consumer app also cannot forbid another app from asking for
+ * a tunnel. What Android does leave open is enough, used in layers, each of which catches what the
+ * one before it lets through:
  *
- *  1. **Discovery.** Any installed app that declares a `VpnService` is found by asking the package
- *     manager which services answer the VPN intent. That catches VPN clients this app has never
- *     heard of, which a curated package list cannot.
- *  2. **Refusal on open.** When a discovered VPN app comes to the foreground it is closed the same
- *     way any blocked app is. This is what actually stops a child using one.
- *  3. **Reclaiming the tunnel.** Android permits exactly one active VPN. When a foreign tunnel
- *     appears, this guard re-establishes our own, which the platform honours by tearing the other
- *     one down. That turns "we noticed a VPN" into "the VPN stopped".
+ *  1. **Refusing the connection request.** A VPN app cannot carry anything until the user accepts
+ *     Android's own "connection request" dialog. The accessibility service sees that dialog
+ *     appear and presses Cancel on the child's behalf ([onConsentDialog]), so a newly installed
+ *     VPN — including one nobody has heard of — never gets its tunnel at all. This app's own
+ *     request, raised for an internet pause, is the one exception, and only for a short window
+ *     after the app itself asked.
+ *  2. **Closing VPN apps on open.** Any installed app that declares a `VpnService` is found by
+ *     asking the package manager, and is closed whenever it comes to the front.
+ *  3. **Locking the phone while a VPN is up.** A VPN approved before this app arrived, or set up
+ *     in Settings, can still connect without a dialog. When the network reports a tunnel this app
+ *     does not own, every app is blocked ([VpnLockout]) except Settings — where the child can
+ *     switch the VPN off — and the phone itself. A VPN that makes the phone unusable is a VPN that
+ *     gets switched off.
  *
- * The limit worth stating: reclaiming needs our own VPN consent to have been granted once. Without
- * it, steps 1 and 2 still work and the guard reports that it is running at reduced strength rather
- * than claiming a protection it does not have.
+ * On a managed device [com.example.childsafetyimpl.platform.admin.NetworkLockdown] forbids VPN
+ * configuration by policy, which replaces all three with Android simply refusing.
+ *
+ * The limits worth stating: layer 1 needs the accessibility service, and layers 2 and 3 need usage
+ * access and permission to draw over other apps. Without them a VPN is detected and reported, not
+ * prevented, and the guard says so rather than claiming a protection it does not have.
  */
 @Singleton
 class VpnGuard @Inject constructor(
@@ -54,11 +68,18 @@ class VpnGuard @Inject constructor(
     private val _posture = MutableStateFlow(emptyPosture)
     val posture: StateFlow<VpnPosture> = _posture.asStateFlow()
 
-    private val _reclaimCount = MutableStateFlow(0)
-    val reclaimCount: StateFlow<Int> = _reclaimCount.asStateFlow()
+    private val _refusedRequests = MutableStateFlow(0)
+
+    /** Connection requests cancelled before a VPN could start. */
+    val refusedRequests: StateFlow<Int> = _refusedRequests.asStateFlow()
 
     private val _blockedLaunches = MutableStateFlow(0)
     val blockedLaunches: StateFlow<Int> = _blockedLaunches.asStateFlow()
+
+    private val _lockouts = MutableStateFlow(0)
+
+    /** Apps refused because a VPN was up when they were opened. */
+    val lockouts: StateFlow<Int> = _lockouts.asStateFlow()
 
     /**
      * Every installed app that can establish a tunnel.
@@ -84,8 +105,7 @@ class VpnGuard @Inject constructor(
             emptySet()
         }
 
-        val curated = com.example.childsafetyimpl.data.source.KnownPackages.vpnTools
-            .filter { inventory.isInstalled(it) }
+        val curated = KnownPackages.vpnTools.filter { inventory.isInstalled(it) }
 
         return (declared + curated)
             .asSequence()
@@ -97,8 +117,7 @@ class VpnGuard @Inject constructor(
     }
 
     fun isVpnApp(packageName: String): Boolean =
-        packageName in vpnPackageCache || com.example.childsafetyimpl.data.source.KnownPackages
-            .isVpnTool(packageName)
+        packageName in vpnPackageCache || KnownPackages.isVpnTool(packageName)
 
     /** Refreshed on the monitor's tick, so the foreground check stays a set lookup. */
     private var vpnPackageCache: Set<String> = emptySet()
@@ -113,108 +132,99 @@ class VpnGuard @Inject constructor(
             foreignTunnelActive = status.thirdPartyVpnActive,
             tunnelInterfaces = status.tunnelInterfaces,
             installedVpnApps = apps,
-            encryptedDnsHost = status.privateDnsHost.takeIf { status.encryptedDnsActive },
+            // Only a resolver that does not filter. Private DNS pointed at one that does is the
+            // filter working, not a way around it.
+            encryptedDnsHost = status.privateDnsHost
+                ?.takeIf { status.encryptedDnsActive }
+                ?.takeUnless { PrivateDnsGuard.isFilteringResolverHost(it) },
         )
         _posture.value = posture
         return posture
     }
 
     /**
-     * Called on every monitor tick with the current posture.
+     * Called on every monitor tick with the current posture, to tell the parent what changed.
      *
-     * Records what changed and, when the parent has asked for it, takes the tunnel back.
+     * The lockout itself is applied by the monitoring loop, app by app, so this only records.
+     * Private DNS pointed at a resolver that does not filter is reported by the monitoring loop's
+     * Private DNS check rather than here, so the parent hears it once.
      */
-    suspend fun onPosture(posture: VpnPosture) {
-        if (posture.foreignTunnelActive) {
-            val wantsReclaim = preferences.settings.first().reclaimTunnel
-            val reclaimed = if (wantsReclaim) reclaimTunnel() else false
+    suspend fun onPosture(posture: VpnPosture, lockoutPossible: Boolean) {
+        if (!posture.foreignTunnelActive) return
 
-            // Three different outcomes, and they must not be described as one. A parent told
-            // "reclaiming is off" when the truth is "you never allowed our tunnel" would go
-            // looking for a switch that is already in the right position.
-            val outcome = when {
-                reclaimed ->
-                    "Protection reclaimed the device tunnel, which ends the other VPN."
-                !wantsReclaim ->
-                    "Taking the tunnel back is switched off, so this was recorded only."
-                else ->
-                    "Protection could not take the tunnel back, because its own filtering " +
-                        "tunnel has never been allowed. Start it once from Controls and this " +
-                        "becomes automatic."
-            }
-
-            eventRepository.record(
-                type = SafetyEventType.VPN_DETECTED,
-                title = if (reclaimed) "A VPN was switched off" else "A VPN is running",
-                detail = buildString {
-                    append("A tunnel this app does not own became active")
-                    if (posture.tunnelInterfaces.isNotEmpty()) {
-                        append(" on ${posture.tunnelInterfaces.joinToString()}")
-                    }
-                    append(". ")
-                    append(outcome)
-                },
-                severity = EventSeverity.HIGH,
-                action = if (reclaimed) EventAction.BLOCKED else EventAction.NOT_ENFORCEABLE,
-                capabilityId = "vpn_restriction",
-                dedupeWindowMillis = 5 * 60_000L,
-            )
+        val lockout = preferences.settings.first().vpnLockout
+        // Three different outcomes, and they must not be described as one. A parent told "the
+        // phone is locked" when the overlay permission is missing would believe a VPN is
+        // unusable while the child is using it.
+        val outcome = when {
+            lockout && lockoutPossible ->
+                "Every app is blocked until it is switched off, apart from Settings, where it " +
+                    "can be turned off, and the phone."
+            !lockout ->
+                "Blocking the phone while a VPN is on is switched off, so this was recorded only."
+            else ->
+                "The phone cannot be blocked while it is on, because usage access or permission " +
+                    "to draw over other apps is missing."
         }
 
-        // Only in the tunnel posture. In the Private DNS postures a named resolver is the
-        // filter rather than a way around it, and the monitoring loop judges it there against
-        // the resolvers that filter; reporting it from here as well would tell a parent that
-        // following the setup screen was a bypass.
-        if (posture.encryptedDnsHost != null &&
-            preferences.settings.first().filteringMode == FilteringMode.VPN_TUNNEL
-        ) {
-            eventRepository.record(
-                type = SafetyEventType.BYPASS_ATTEMPT,
-                title = "Private DNS is pointed elsewhere",
-                detail = "Name lookups are going to ${posture.encryptedDnsHost} over an encrypted " +
-                    "channel, which passes around the filter. Turning Private DNS off in Android " +
-                    "settings restores filtering.",
-                severity = EventSeverity.HIGH,
-                action = EventAction.NOT_ENFORCEABLE,
-                capabilityId = "vpn_restriction",
-                dedupeWindowMillis = 60 * 60_000L,
-            )
-        }
+        eventRepository.record(
+            type = SafetyEventType.VPN_DETECTED,
+            title = "A VPN is running",
+            detail = buildString {
+                append("A tunnel this app does not own became active")
+                if (posture.tunnelInterfaces.isNotEmpty()) {
+                    append(" on ${posture.tunnelInterfaces.joinToString()}")
+                }
+                append(". ")
+                append(outcome)
+            },
+            severity = EventSeverity.HIGH,
+            action = if (lockout && lockoutPossible) EventAction.BLOCKED else EventAction.NOT_ENFORCEABLE,
+            capabilityId = CAPABILITY_ID,
+            dedupeWindowMillis = 5 * 60_000L,
+        )
     }
 
     /**
-     * Re-establishes our own tunnel, which ends whichever VPN currently holds it.
+     * Android's VPN connection request is on screen. Returns whether it should be refused.
      *
-     * Only possible once VPN consent has been granted; `prepare` returning an intent means it has
-     * not been, and a background service cannot show that dialog, so the guard reports the gap
-     * instead of failing silently.
+     * [namesThisApp] is whether the dialog's text names this app. Both that and a request this app
+     * raised moments ago are needed to let it through: the window alone would let any VPN that
+     * asked during it slip past, and the name alone could be copied by an app that called itself
+     * the same thing. The caller presses Cancel, because only the accessibility service can, and
+     * reports back through [onConsentRefused].
      */
-    fun reclaimTunnel(): Boolean {
-        val consentNeeded = try {
-            VpnService.prepare(context) != null
-        } catch (_: Exception) {
-            true
-        }
-        if (consentNeeded) return false
+    suspend fun shouldRefuseConsent(namesThisApp: Boolean): Boolean {
+        if (namesThisApp && ownConsentPending()) return false
+        val settings = preferences.settings.first()
+        return settings.protectionEnabled &&
+            settings.isEnabled(ProtectionFeature.VPN_RESTRICTION) &&
+            settings.blockVpnApps
+    }
 
-        return try {
-            val intent = Intent(context, ChildSafetyVpnService::class.java)
-                .setAction(ChildSafetyVpnService.ACTION_RECLAIM)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
+    suspend fun onConsentRefused(refused: Boolean) {
+        if (refused) _refusedRequests.update { it + 1 }
+        eventRepository.record(
+            type = SafetyEventType.BYPASS_ATTEMPT,
+            title = if (refused) "A VPN connection was refused" else "A VPN asked to connect",
+            detail = if (refused) {
+                "An app asked Android for permission to start a VPN. The request was cancelled " +
+                    "before it could be accepted, so the VPN never started."
             } else {
-                context.startService(intent)
-            }
-            _reclaimCount.value += 1
-            true
-        } catch (_: Exception) {
-            false
-        }
+                "An app asked Android for permission to start a VPN, and the request could not " +
+                    "be cancelled automatically. If it was accepted, the phone is blocked while " +
+                    "the VPN is on."
+            },
+            severity = EventSeverity.HIGH,
+            action = if (refused) EventAction.BLOCKED else EventAction.NOT_ENFORCEABLE,
+            capabilityId = CAPABILITY_ID,
+            dedupeWindowMillis = 60_000L,
+        )
     }
 
     /** Recorded by the monitor when it closes a VPN app that was opened. */
     suspend fun onVpnAppBlocked(packageName: String, appLabel: String) {
-        _blockedLaunches.value += 1
+        _blockedLaunches.update { it + 1 }
         eventRepository.record(
             type = SafetyEventType.RESTRICTED_APP_OPENED,
             title = "$appLabel was closed",
@@ -223,15 +233,48 @@ class VpnGuard @Inject constructor(
             appLabel = appLabel,
             severity = EventSeverity.HIGH,
             action = EventAction.BLOCKED,
-            capabilityId = "vpn_restriction",
+            capabilityId = CAPABILITY_ID,
             dedupeWindowMillis = 60_000L,
         )
     }
 
-    private companion object {
-        const val VPN_SERVICE_ACTION = "android.net.VpnService"
+    /** Recorded by the monitor when it blocks an app because a VPN is up. */
+    fun onLockout() {
+        _lockouts.update { it + 1 }
+    }
 
-        val emptyPosture = VpnPosture(
+    companion object {
+        const val CAPABILITY_ID = "vpn_restriction"
+        private const val VPN_SERVICE_ACTION = "android.net.VpnService"
+
+        /**
+         * How long after this app asks for its own VPN consent the dialog is left alone.
+         *
+         * Long enough for a parent to read the dialog and accept it, short enough that a child
+         * cannot open a pause request and then use the window for something else.
+         */
+        private const val OWN_CONSENT_WINDOW_MILLIS = 90_000L
+
+        @Volatile private var ownConsentRequestedAt = 0L
+
+        /**
+         * This app's own VPN consent intent, or null when consent is already held.
+         *
+         * Every place that raises the dialog goes through here, because the guard cancels every
+         * connection request it did not expect, and the pause needs one.
+         */
+        fun ownConsentIntent(context: Context): Intent? {
+            val intent = runCatching { VpnService.prepare(context) }.getOrNull() ?: return null
+            ownConsentRequestedAt = SystemClock.elapsedRealtime()
+            NetworkLockdown.liftVpnRestriction(context)
+            return intent
+        }
+
+        fun ownConsentPending(): Boolean =
+            ownConsentRequestedAt != 0L &&
+                SystemClock.elapsedRealtime() - ownConsentRequestedAt < OWN_CONSENT_WINDOW_MILLIS
+
+        private val emptyPosture = VpnPosture(
             ownTunnelActive = false,
             foreignTunnelActive = false,
             tunnelInterfaces = emptyList(),

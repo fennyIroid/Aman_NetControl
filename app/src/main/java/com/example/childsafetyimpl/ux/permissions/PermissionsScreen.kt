@@ -2,7 +2,6 @@ package com.example.childsafetyimpl.ux.permissions
 
 import android.Manifest
 import android.content.Intent
-import android.net.VpnService
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -43,6 +42,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import com.example.childsafetyimpl.platform.network.VpnGuard
 import com.example.childsafetyimpl.core.permission.SafetyPermission
 import com.example.childsafetyimpl.ui.components.DetailHero
 import com.example.childsafetyimpl.ui.components.GrantChip
@@ -169,8 +169,9 @@ fun PermissionsScreen(
 
                                 SafetyPermission.VPN_CONSENT -> {
                                     // The one grant that comes from a system consent dialog rather
-                                    // than a Settings screen.
-                                    val prepare = VpnService.prepare(context)
+                                    // than a Settings screen. Raised through the VPN guard, which
+                                    // otherwise cancels every connection request it sees.
+                                    val prepare = VpnGuard.ownConsentIntent(context)
                                     if (prepare != null) {
                                         pendingVpn = true
                                         vpnLauncher.launch(prepare)

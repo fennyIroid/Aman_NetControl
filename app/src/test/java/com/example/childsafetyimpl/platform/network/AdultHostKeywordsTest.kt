@@ -46,6 +46,15 @@ class AdultHostKeywordsTest {
     }
 
     @Test
+    fun `Arabic-market adult names are caught, and the short words they are built from are not`() {
+        listOf("sexalarab.com", "arabsex.xxx", "www.arabxnxx.com", "xn--ygba1c.chat")
+            .forEach { assertNotNull(it, AdultHostKeywords.matchOf(it)) }
+        // nik.gov.pl is a Polish government office; sks-keyservers.net is a PGP key server.
+        listOf("nik.gov.pl", "sks-keyservers.net", "electroneek.com", "arabnews.com", "arabia.com")
+            .forEach { assertNull(it, AdultHostKeywords.matchOf(it)) }
+    }
+
+    @Test
     fun `an empty host matches nothing`() {
         assertNull(AdultHostKeywords.matchOf(""))
     }

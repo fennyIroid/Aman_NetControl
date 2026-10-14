@@ -49,7 +49,8 @@ class VpnDetector @Inject constructor(
     fun currentStatus(): VpnStatus {
         val byCapability = hasVpnTransport()
         val interfaces = tunnelInterfaces()
-        val ownTunnel = ChildSafetyVpnService.isRunning.value
+        // The only tunnel this app ever raises is the pause, so that is the one to discount.
+        val ownTunnel = PauseTunnelService.State.running.value
         return VpnStatus(
             vpnActive = byCapability || interfaces.isNotEmpty(),
             ownTunnelActive = ownTunnel,
@@ -90,9 +91,9 @@ class VpnDetector @Inject constructor(
     /**
      * Private DNS mode, read from global settings.
      *
-     * The key is not a public constant, so this is defensive by necessity. When private DNS points
-     * at an external resolver, the tunnel's name-based filtering is bypassed entirely; detecting
-     * that is the only response available, since the setting cannot be changed by an app.
+     * The key is not a public constant, so this is defensive by necessity. Private DNS is how this
+     * product filters, so whether the resolver it points at is a filtering one is judged by the
+     * caller against [PrivateDnsGuard], not here.
      */
     private fun privateDnsMode(): String? = try {
         Settings.Global.getString(context.contentResolver, "private_dns_mode")

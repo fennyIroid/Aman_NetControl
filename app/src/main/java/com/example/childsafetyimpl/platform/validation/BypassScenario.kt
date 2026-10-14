@@ -99,15 +99,21 @@ object BypassScenarios {
             id = "web.chrome",
             group = ScenarioGroup.WEBSITE_BLOCKING,
             attempt = "Open a site in a blocked category in Chrome.",
-            behaviour = "The name lookup is refused in the tunnel before the connection is made.",
+            behaviour = "The name lookup goes to the filtering resolver through Private DNS, " +
+                "which refuses it before the connection is made.",
             classification = Classification.PREVENTED,
-            mechanism = "ChildSafetyVpnService.handleQuery via SafetyRulesRepository.evaluateHost",
+            mechanism = "Android Private DNS pointed at a filtering resolver, checked by " +
+                "PrivateDnsGuard.currentPosture",
+            strongerWith = "Coverage is the resolver's category list. A resolver of our own " +
+                "would let this product hold the list it is measured against.",
         ),
         BypassScenario(
             id = "web.other_browser",
             group = ScenarioGroup.WEBSITE_BLOCKING,
             attempt = "Open the same site in Samsung Internet, Firefox, Brave or Opera.",
-            behaviour = "Identical. Filtering is at the DNS layer, so it is not per-browser.",
+            behaviour = "Identical for any browser that uses the system resolver. Private DNS is " +
+                "a system setting, so it is not per-browser. A browser configured with its " +
+                "own secure-DNS provider is the exception; see dns.browser_doh.",
             classification = Classification.PREVENTED,
             mechanism = "Same path. No browser-specific code is involved.",
         ),
@@ -115,23 +121,55 @@ object BypassScenarios {
             id = "web.direct_ip",
             group = ScenarioGroup.WEBSITE_BLOCKING,
             attempt = "Type the site's raw IP address into the address bar.",
-            behaviour = "Not blocked. No name is looked up, so nothing reaches the filter.",
-            classification = Classification.PLATFORM_LIMIT,
-            mechanism = "The tunnel routes DNS only, by design, so it never sees the connection.",
-            strongerWith = "Routing all traffic through the tunnel, at the cost of battery, " +
-                "banking-app compatibility and the risk that a bug takes the device offline. " +
-                "Not recommended: the attack requires knowing an IP, and most large sites do " +
-                "not serve their content from a bare address.",
+            behaviour = "No name is looked up, so the resolver never sees it; the address bar " +
+                "does. Any public address opened in a browser is refused while filtering is " +
+                "on, because nobody browses by address. Private addresses (a router at " +
+                "192.168.1.1, a printer) are untouched, and a parent can allow an address by " +
+                "hand. Apps other than browsers that connect to an address they were built " +
+                "with are not covered.",
+            classification = Classification.PREVENTED,
+            mechanism = "DirectAddress, applied in SafetyRulesRepository.evaluateHost for the " +
+                "built-in browser and SearchTermGuard for other browsers",
+            strongerWith = "Seeing addresses outside browsers takes a tunnel, at the cost of " +
+                "banking-app compatibility — the cost this product moved to Private DNS to " +
+                "avoid. Not recommended.",
+        ),
+        BypassScenario(
+            id = "web.disguised_ip",
+            group = ScenarioGroup.WEBSITE_BLOCKING,
+            attempt = "Open the address in a disguised form: http://1123971625, " +
+                "http://0x42fe7229, http://allowed.com@66.254.114.41, or 66-254-114-41.sslip.io.",
+            behaviour = "Each is read back to the address it stands for and refused the same " +
+                "way. A user name before an @ is no longer mistaken for the site, which also " +
+                "closes http://allowed.com@refused.com against the parent's own rules.",
+            classification = Classification.PREVENTED,
+            mechanism = "DirectAddress.fromAddressBar and BrowserSurfaces.hostFrom",
         ),
         BypassScenario(
             id = "web.translate_proxy",
             group = ScenarioGroup.WEBSITE_BLOCKING,
-            attempt = "Reach a blocked site through Google Translate or a web proxy.",
-            behaviour = "Not blocked unless the proxy's own host is on a list.",
+            attempt = "Reach a blocked site through Google Translate, the AMP cache or the " +
+                "Wayback Machine.",
+            behaviour = "Each writes the original site into its own address " +
+                "(www-site-com.translate.goog, web.archive.org/web/…/site.com), which is read " +
+                "back and judged as the site. Only a relay carrying a refused site is refused, " +
+                "so translating an ordinary page keeps working. The Wayback form is caught " +
+                "while the full address is visible in the bar.",
+            classification = Classification.PREVENTED,
+            mechanism = "ProxyOrigin, from SafetyRulesRepository.evaluateHost and SearchTermGuard",
+        ),
+        BypassScenario(
+            id = "web.web_proxy",
+            group = ScenarioGroup.WEBSITE_BLOCKING,
+            attempt = "Reach a blocked site through a general web proxy site.",
+            behaviour = "A general proxy hides the site it fetches, so nothing on the device " +
+                "can read it back. Refused only if the resolver lists the proxy itself: " +
+                "measured on ten well-known proxies, CleanBrowsing Family and KAHF Guard " +
+                "refused all ten, Cloudflare for Families and AdGuard Family none.",
             classification = Classification.PLATFORM_LIMIT,
             mechanism = "The lookup is for the proxy, which is a permitted host.",
-            strongerWith = "A maintained proxy and anonymiser category in the licensed feed. " +
-                "This is a category-coverage problem, not an architecture problem.",
+            strongerWith = "A maintained proxy and anonymiser category at the resolver. This " +
+                "is a category-coverage problem, not an architecture problem.",
         ),
 
         // --- Safe Search --------------------------------------------------------------------
@@ -139,61 +177,70 @@ object BypassScenarios {
             id = "search.google_off",
             group = ScenarioGroup.SAFE_SEARCH,
             attempt = "Switch SafeSearch off inside Google's own settings and search again.",
-            behaviour = "Still filtered. The lookup is answered with forcesafesearch.google.com, " +
-                "which serves filtered results and offers no control to turn them off.",
+            behaviour = "Still filtered with a resolver that forces SafeSearch: Google's lookup " +
+                "is answered with its SafeSearch address, which serves filtered results and " +
+                "offers no control to turn them off. With a resolver that does not force it, " +
+                "the protection screen says so rather than claiming it.",
             classification = Classification.PREVENTED,
-            mechanism = "SafeSearchDns.aliasFor",
+            mechanism = "The resolver's SafeSearch enforcement, declared per resolver as " +
+                "PrivateDnsResolver.forcesSafeSearch",
         ),
         BypassScenario(
             id = "search.country_domain",
             group = ScenarioGroup.SAFE_SEARCH,
             attempt = "Switch to google.co.uk, google.ae or any other country domain.",
-            behaviour = "Still filtered. The alias matches the shape of Google's country " +
-                "domains rather than a fixed list of them.",
+            behaviour = "Still filtered with CleanBrowsing Family, which applies SafeSearch to " +
+                "Google's country domains.",
             classification = Classification.PREVENTED,
-            mechanism = "SafeSearchDns.googleDomain regular expression",
+            mechanism = "The resolver's SafeSearch enforcement",
         ),
         BypassScenario(
             id = "search.youtube_app",
             group = ScenarioGroup.SAFE_SEARCH,
             attempt = "Search inside the YouTube app rather than the website.",
-            behaviour = "Restricted Mode applies. The alias covers youtubei.googleapis.com, " +
-                "which is the app's own data path and not just the website.",
+            behaviour = "Restricted Mode applies with CleanBrowsing Family, which answers the " +
+                "YouTube app's own hosts with the restricted address.",
             classification = Classification.PREVENTED,
-            mechanism = "SafeSearchDns exact alias table",
+            mechanism = "The resolver's YouTube Restricted Mode enforcement",
         ),
 
         // --- Block-list and allow-list ------------------------------------------------------
         BypassScenario(
             id = "rules.parent_domain",
             group = ScenarioGroup.LIST_RULES,
-            attempt = "Visit a domain a parent added by hand.",
-            behaviour = "Refused, and recorded against the rule that matched it.",
+            attempt = "Visit a domain a parent added by hand, in a browser.",
+            behaviour = "A public resolver cannot hold one family's list, so the address bar is " +
+                "read on the device and the browser is left when the host is refused. The page " +
+                "can start loading first, and apps other than browsers are not covered.",
             classification = Classification.PREVENTED,
-            mechanism = "DomainRule with RuleSource.PARENT",
+            mechanism = "SearchTermGuard.onBrowserScreen via SafetyRulesRepository.evaluateHost",
+            strongerWith = "A per-family resolver, so the parent's list is refused at the " +
+                "lookup for every app. Phase 1 backend work.",
         ),
         BypassScenario(
             id = "rules.allow_only",
             group = ScenarioGroup.LIST_RULES,
             attempt = "With allow-list-only mode on, visit anything not on the list.",
-            behaviour = "Refused. Only listed names resolve.",
-            classification = Classification.PREVENTED,
-            mechanism = "SafetySettings.allowListOnlyBrowsing",
+            behaviour = "The browser is left as soon as its address bar shows a host that is " +
+                "not on the list. Apps other than browsers are not limited by it.",
+            classification = Classification.DETECTED,
+            mechanism = "SafetySettings.allowListOnlyBrowsing, read by " +
+                "SafetyRulesRepository.evaluateHost from SearchTermGuard",
+            strongerWith = "A per-family resolver that answers only listed names, or restricting " +
+                "every other browser from App restriction and leaving the built-in browser, " +
+                "which enforces the list before a page loads.",
         ),
         BypassScenario(
             id = "rules.allow_only_breakage",
             group = ScenarioGroup.LIST_RULES,
             attempt = "With allow-list-only on, check whether the device still functions.",
-            behaviour = "Connectivity checks, push notifications, Play Store updates, account " +
-                "sign-in and time sync keep working, because a fixed set of system hosts stays " +
-                "reachable. A listed website whose pictures come from a separate CDN may load " +
-                "without them until that host is listed too: general CDNs are deliberately not " +
-                "exempt, because a whole website can be served from one.",
+            behaviour = "Everything outside browsers keeps working, because nothing refuses " +
+                "lookups device-wide: connectivity checks, push, Play updates, sign-in and " +
+                "time sync are untouched. Inside the built-in browser, a fixed set of system " +
+                "hosts stays reachable and general CDNs are deliberately not exempt.",
             classification = Classification.PREVENTED,
             mechanism = "SystemTrafficExemptions, consulted only after the parent's own rules " +
                 "and the blocked categories, so it never outranks a block",
-            strongerWith = "Per-site CDN pairing from a licensed category feed, so listing a " +
-                "site brings its asset hosts with it.",
         ),
 
         // --- VPN ----------------------------------------------------------------------------
@@ -206,92 +253,90 @@ object BypassScenarios {
             mechanism = "VpnGuard.isVpnApp via the MonitoringService foreground check",
         ),
         BypassScenario(
-            id = "vpn.unknown_app",
+            id = "vpn.new_app_consent",
             group = ScenarioGroup.VPN,
-            attempt = "Use a VPN app that is not on the known list.",
-            behaviour = "Not closed on open, but the tunnel it establishes is detected within " +
-                "one monitoring tick and reclaimed if reclaim is switched on.",
+            attempt = "Install a VPN app the product has never heard of and accept its " +
+                "connection request.",
+            behaviour = "Android's connection request is cancelled by the accessibility " +
+                "service as it appears, so the VPN never gets permission to start. Its app is " +
+                "closed on open as well, because it declares a VPN service.",
             classification = Classification.PREVENTED,
-            mechanism = "VpnDetector transport and interface checks, then ACTION_RECLAIM",
-            strongerWith = "Querying the VPN service intent finds most of them regardless of " +
-                "the curated list; reclaim is the backstop that does not depend on naming.",
+            mechanism = "SafetyAccessibilityService.onVpnDialog and VpnGuard.shouldRefuseConsent",
+            strongerWith = "Device Owner, where VPN setup is forbidden by policy and Android " +
+                "refuses on its own (NetworkLockdown). Without the accessibility service the " +
+                "request is not refused, and the lockout below is what remains.",
+        ),
+        BypassScenario(
+            id = "vpn.already_approved",
+            group = ScenarioGroup.VPN,
+            attempt = "Use a VPN that was approved before protection was installed, from its " +
+                "notification or quick tile so its app is never opened.",
+            behaviour = "No dialog appears, so nothing can be refused, and it connects. Within " +
+                "about four seconds every app but Settings, the home screen and the phone is " +
+                "blocked, with a button to the VPN screen, until it is switched off.",
+            classification = Classification.PREVENTED,
+            mechanism = "VpnDetector, then VpnLockout in MonitoringService.evaluate",
+            strongerWith = "Device Owner, which stops it starting at all. Without usage access " +
+                "or permission to draw over apps the phone cannot be blocked and this is " +
+                "reported only.",
         ),
         BypassScenario(
             id = "vpn.builtin_settings",
             group = ScenarioGroup.VPN,
             attempt = "Configure an IKEv2 or L2TP VPN in Android Settings rather than an app.",
-            behaviour = "Detected as a foreign tunnel and reclaimed. The VPN settings screen " +
-                "itself can also be closed on sight when that option is on.",
+            behaviour = "The VPN settings screen is closed on sight. A profile created anyway " +
+                "is a foreign tunnel when it connects, and the phone is blocked until it is " +
+                "switched off; the VPN screen is left open for exactly that.",
             classification = Classification.PREVENTED,
-            mechanism = "VpnDetector plus the VPN_SETTINGS surface signature",
+            mechanism = "The VPN_SETTINGS surface signature, then VpnLockout",
         ),
         BypassScenario(
             id = "vpn.always_on_third_party",
             group = ScenarioGroup.VPN,
             attempt = "Set a third-party VPN as always-on with lockdown in Settings.",
-            behaviour = "This app can no longer establish its tunnel at all, and says so. " +
-                "Lockdown means Android refuses to let anything else hold the slot.",
-            classification = Classification.DETECTED,
-            mechanism = "Builder.establish returns null; State.setError carries the reason",
-            strongerWith = "Device Owner, which owns the always-on setting and can point it at " +
-                "this app permanently. This is the clearest example of the provisioning " +
-                "question deciding a real capability.",
-        ),
-        BypassScenario(
-            id = "vpn.revoke_consent",
-            group = ScenarioGroup.VPN,
-            attempt = "Revoke this app's VPN permission from Settings or the quick tile.",
-            behaviour = "onRevoke fires, the event is recorded as critical, and the tunnel is " +
-                "re-established after a short delay if reclaim is on. A determined child can " +
-                "repeat this faster than the reclaim.",
-            classification = Classification.DETECTED,
-            mechanism = "ChildSafetyVpnService.onRevoke",
-            strongerWith = "Device Owner with always-on lockdown, where the revoke is not " +
-                "offered to the user at all.",
+            behaviour = "The phone is blocked while it is connected, as for any VPN. It also " +
+                "stops an internet pause being applied, because lockdown refuses every other " +
+                "tunnel; that is raised as its own issue.",
+            classification = Classification.PREVENTED,
+            mechanism = "VpnLockout, and PauseTunnelService reporting the refused tunnel",
+            strongerWith = "Device Owner, which forbids VPN configuration so always-on cannot " +
+                "be set at all.",
         ),
 
         // --- DNS and network bypass ---------------------------------------------------------
         BypassScenario(
             id = "dns.private_dns_hostname",
             group = ScenarioGroup.DNS_BYPASS,
-            attempt = "Set Private DNS to dns.google in Android Settings.",
-            behaviour = "Every lookup leaves encrypted and unfilterable. Detected on the next " +
-                "tick and raised as a critical issue with the exact steps to undo it.",
+            attempt = "Set Private DNS to dns.google, or switch it off, in Android Settings.",
+            behaviour = "The settings screen that holds it is closed on sight when VPN " +
+                "restriction is on. Where that fails, every lookup leaves unfiltered, and it " +
+                "is detected on the next tick and raised as a critical issue with the steps " +
+                "to undo it.",
             classification = Classification.DETECTED,
-            mechanism = "PrivateDnsGuard.currentPosture",
-            strongerWith = "Device Owner, which can set and lock Private DNS. No other route " +
-                "exists: Android does not let an ordinary app write this setting.",
+            mechanism = "The VPN_SETTINGS surface signature and PrivateDnsGuard.currentPosture",
+            strongerWith = "Device Owner, where this app sets Private DNS itself and locks it " +
+                "(NetworkLockdown). No other route exists: Android does not let an ordinary " +
+                "app write this setting.",
         ),
         BypassScenario(
-            id = "dns.browser_doh_hostname",
+            id = "dns.browser_doh",
             group = ScenarioGroup.DNS_BYPASS,
-            attempt = "Switch on secure DNS in Chrome, chosen by provider name.",
-            behaviour = "The lookup for the resolver's own hostname is refused, so Chrome falls " +
-                "back to the system resolver, which is the filtered one.",
-            classification = Classification.PREVENTED,
-            mechanism = "EncryptedDnsPolicy.resolverHosts",
-        ),
-        BypassScenario(
-            id = "dns.browser_doh_bootstrap_ip",
-            group = ScenarioGroup.DNS_BYPASS,
-            attempt = "Point secure DNS at a resolver by IP address, so no name lookup happens.",
-            behaviour = "Packets to well-known resolver addresses are dropped by the host routes " +
-                "the tunnel adds for exactly this case.",
-            classification = Classification.PREVENTED,
-            mechanism = "EncryptedDnsPolicy.blockedAddresses, added as /32 routes in startTunnel",
-            strongerWith = "Coverage is a list, not a proof. A resolver not on the list, reached " +
-                "by address, still works. Recorded as a known residual.",
-        ),
-        BypassScenario(
-            id = "dns.unknown_resolver_ip",
-            group = ScenarioGroup.DNS_BYPASS,
-            attempt = "Use a self-hosted or obscure DoH resolver by IP.",
-            behaviour = "Not blocked. Neither defence applies: no name is looked up and the " +
-                "address is not on the list.",
+            attempt = "Switch on secure DNS inside a browser and choose a provider.",
+            behaviour = "A browser with its own secure-DNS setting can send its lookups to a " +
+                "resolver of its choosing, around Private DNS. The browser has to find that " +
+                "resolver by name first, and CleanBrowsing Family refuses those names: " +
+                "measured, it refused nine of ten common ones (dns.google, cloudflare-dns.com, " +
+                "dns.quad9.net, NextDNS and others; not its own doh.cleanbrowsing.org, which " +
+                "filters the same way). A resolver entered by address, such as " +
+                "https://1.1.1.1/dns-query, needs no lookup and is not stopped. Cloudflare and " +
+                "AdGuard Family refuse none of the ten. The parent's own site rules, the " +
+                "address check and the relay check still apply in the address bar.",
             classification = Classification.PLATFORM_LIMIT,
-            mechanism = "Out of reach of a DNS-scoped tunnel.",
-            strongerWith = "Full-traffic routing with SNI inspection, which is a materially " +
-                "different product with materially worse battery and compatibility.",
+            mechanism = "The resolver's own refusal of DNS-service names; nothing on the device " +
+                "sees the browser's lookups.",
+            strongerWith = "Restricting browsers that offer their own secure DNS from App " +
+                "restriction. Device Owner can also disable the browser's setting through " +
+                "managed configuration where the browser supports it.",
         ),
         BypassScenario(
             id = "dns.tethering",
@@ -299,7 +344,7 @@ object BypassScenarios {
             attempt = "Share the connection to a second device and browse from there.",
             behaviour = "Nothing on the second device is filtered.",
             classification = Classification.PLATFORM_LIMIT,
-            mechanism = "Tethered traffic does not traverse this device's VPN.",
+            mechanism = "Private DNS applies to this device's own lookups only.",
             strongerWith = "Device Owner can disable tethering outright.",
         ),
 
@@ -308,11 +353,12 @@ object BypassScenarios {
             id = "pause.applies",
             group = ScenarioGroup.INTERNET_PAUSE,
             attempt = "Pause the internet, then try to browse, stream and message.",
-            behaviour = "All of it stops, on Wi-Fi and on mobile data, because the pause is " +
-                "below both. Name lookups are refused rather than dropped so apps fail in " +
-                "milliseconds instead of hanging.",
+            behaviour = "All of it stops, on Wi-Fi and on mobile data and in this app's own " +
+                "browser, because the pause holds the device's VPN slot and carries nothing. " +
+                "Name lookups are refused rather than dropped so apps fail in milliseconds " +
+                "instead of hanging.",
             classification = Classification.PREVENTED,
-            mechanism = "TunnelMode.PAUSED with a default route and no forwarding",
+            mechanism = "PauseTunnelService: IPv4 and IPv6 default routes, nothing forwarded",
         ),
         BypassScenario(
             id = "pause.child_message",
@@ -340,12 +386,12 @@ object BypassScenarios {
             group = ScenarioGroup.INTERNET_PAUSE,
             attempt = "Let the system or a manufacturer's task killer end the app's process " +
                 "while the internet is paused.",
-            behaviour = "The tunnel reads the parent's pause from storage every time it starts, " +
-                "so when Android restarts it the pause comes back rather than filtering. Where " +
-                "the build does not restart it, the monitoring loop puts the pause back within " +
-                "seconds. The parent is alerted only when neither is possible.",
+            behaviour = "The pause service reads the parent's pause from storage every time it " +
+                "starts, so when Android restarts it the pause comes back. Where the build " +
+                "does not restart it, the monitoring loop puts the pause back within seconds. " +
+                "The parent is alerted only when neither is possible.",
             classification = Classification.PREVENTED,
-            mechanism = "TunnelMode.restingFor on every tunnel start, and " +
+            mechanism = "PauseTunnelService.onStartCommand, and " +
                 "MonitoringService.checkInternetPause",
             strongerWith = "Device Owner with always-on lockdown, which also covers a force " +
                 "stop from Settings.",
@@ -353,13 +399,13 @@ object BypassScenarios {
         BypassScenario(
             id = "pause.revoke_vpn",
             group = ScenarioGroup.INTERNET_PAUSE,
-            attempt = "Revoke VPN permission while the internet is paused.",
-            behaviour = "The pause stops applying. The mismatch between what the parent asked " +
-                "for and what is in force is raised as its own issue on the dashboard and as a " +
-                "parent alert, rather than left silent.",
+            attempt = "Revoke the connection permission while the internet is paused.",
+            behaviour = "The pause stops applying. It is recorded as critical and put back " +
+                "when Android allows, and the mismatch between what the parent asked for and " +
+                "what is in force is raised as its own issue rather than left silent.",
             classification = Classification.DETECTED,
-            mechanism = "ProtectionHealth.IssueKind.PAUSE_NOT_ENFORCED and " +
-                "MonitoringService.checkInternetPause",
+            mechanism = "PauseTunnelService.onRevoke, ProtectionHealth.IssueKind." +
+                "PAUSE_NOT_ENFORCED and MonitoringService.checkInternetPause",
             strongerWith = "Device Owner with always-on lockdown.",
         ),
 

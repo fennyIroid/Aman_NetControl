@@ -143,6 +143,32 @@ class ImageFusionTest {
         assertTrue(fusion.kinds.isEmpty())
     }
 
+    /**
+     * Driven on a Galaxy M36: a peach home-screen wallpaper, which the labeller had nothing to say
+     * about, scored 0.49 on skin tone alone and was covered.
+     */
+    @Test
+    fun `pixel evidence alone never covers at any strictness`() {
+        val fusion = classifier.fuse(labels = emptyList(), heuristicScore = 1.0f)
+        ProtectionLevel.entries.forEach { level ->
+            assertTrue(
+                "${level.name}: pixels alone scored ${fusion.fused}, threshold ${level.threshold}",
+                fusion.fused < level.threshold,
+            )
+        }
+    }
+
+    @Test
+    fun `body labels the pixels agree with still cover when nothing else is in the picture`() {
+        // The case the ceiling must not cost: no clothing label, strong body labels, and a pixel
+        // reading that agrees. This is what the labeller says about nudity.
+        val fusion = classifier.fuse(
+            labels = listOf(label("Flesh", 0.92f), label("Skin", 0.9f), label("Abdomen", 0.8f)),
+            heuristicScore = 0.8f,
+        )
+        assertTrue("scored ${fusion.fused}", fusion.fused >= ProtectionLevel.BALANCED.threshold)
+    }
+
     @Test
     fun `the risk table covers exposure and stays auditable`() {
         assertTrue(SafetyLabelRisk.mappedLabelCount > 20)

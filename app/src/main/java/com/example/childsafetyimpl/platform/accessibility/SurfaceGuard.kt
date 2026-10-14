@@ -12,6 +12,7 @@ import com.example.childsafetyimpl.domain.model.RestrictedSurface
 import com.example.childsafetyimpl.domain.model.SafetyEventType
 import com.example.childsafetyimpl.domain.model.SurfaceUsage
 import com.example.childsafetyimpl.domain.repository.SafetyEventRepository
+import com.example.childsafetyimpl.platform.enforcement.MonitoringService
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -114,8 +115,16 @@ class SurfaceGuard @Inject constructor(
             RestrictedSurface.STATUS_STORY ->
                 settings.isEnabled(ProtectionFeature.STATUS_CONTROL)
 
+            // Closed on sight, apart from two moments when it is the right place to be. While
+            // another VPN is up, the lockout sends the child here to switch it off, and closing
+            // it would leave no way out. And for a few minutes after a parent opens Settings from
+            // the Private DNS setup, because this signature covers the Private DNS screen too and
+            // the parent would otherwise be thrown out of the step they were asked to do.
             RestrictedSurface.VPN_SETTINGS ->
-                settings.isEnabled(ProtectionFeature.VPN_RESTRICTION) && settings.blockVpnSettings
+                settings.isEnabled(ProtectionFeature.VPN_RESTRICTION) &&
+                    settings.blockVpnSettings &&
+                    !MonitoringService.State.vpnActive.value &&
+                    !parentSetupOpen()
 
             // The AI surface is observed rather than refused. Its limit is a time budget, which
             // the monitoring service enforces at the app level.
@@ -272,7 +281,24 @@ class SurfaceGuard @Inject constructor(
     fun observeAllowanceRemaining(surface: RestrictedSurface): Flow<Boolean> =
         observeUsageToday(surface).map { !it.exhausted }
 
-    private companion object {
-        const val MINIMUM_DWELL_MILLIS = 700L
+    companion object {
+        private const val MINIMUM_DWELL_MILLIS = 700L
+
+        /** Long enough to find Private DNS on any manufacturer's Settings and type a hostname. */
+        private const val PARENT_SETUP_WINDOW_MILLIS = 5 * 60_000L
+
+        @Volatile private var parentSetupUntil = 0L
+
+        /**
+         * Leaves the network settings screens open for a few minutes, because a parent is about
+         * to set Private DNS. A child who opens this app's Controls can press the same button,
+         * which is why the window is short and why a change to Private DNS is still alerted on
+         * by the monitoring loop either way.
+         */
+        fun openForParentSetup() {
+            parentSetupUntil = SystemClock.elapsedRealtime() + PARENT_SETUP_WINDOW_MILLIS
+        }
+
+        private fun parentSetupOpen(): Boolean = SystemClock.elapsedRealtime() < parentSetupUntil
     }
 }

@@ -8,7 +8,9 @@
     far the app says it scrolled, which the capture cannot measure through the covers themselves.
     Only the numbers on a scroll event are read. The notification timeout is zero because Android
     coalesces events inside the timeout and keeps only the last, and a scroll report dropped is
-    distance lost; the service throttles its own tree walks in code instead. canRetrieveWindowContent is the flag that makes this service policy-sensitive on
+    distance lost; the service throttles its own tree walks in code instead. Screenshots are
+    requested only to ask whether a browser's window is secure (a private tab): Android refuses a
+    secure window, and any screenshot it does return is closed unread. canRetrieveWindowContent is the flag that makes this service policy-sensitive on
     Google Play, and the app declares an accessibility purpose for it accordingly.
 
 -->
@@ -17,6 +19,7 @@
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagReportViewIds|flagIncludeNotImportantViews"
     android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
     android:description="@string/accessibility_service_description"
     android:notificationTimeout="0"
     android:settingsActivity="com.example.childsafetyimpl.MainActivity" />

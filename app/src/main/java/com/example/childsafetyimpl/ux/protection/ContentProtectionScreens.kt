@@ -64,26 +64,19 @@ fun AdRemovalScreen(viewModel: AdRemovalViewModel) {
         heroStats = listOf(
             state.totalBlocked.toString() to "Ads removed",
             state.hostCount.toString() to "Ad hosts",
-            (if (state.tunnelRunning) "On" else "Off") to "Device-wide",
+            state.patternCount.toString() to "Patterns",
         ),
     ) {
-        if (!state.tunnelRunning) {
-            OutcomeCard(
-                headline = "Ads are removed here, not everywhere",
-                detail = "Inside the built-in player and browser, ad requests are refused and ad " +
-                    "slots are hidden. Removing ads from other apps needs the filtering tunnel, " +
-                    "which is not running.",
-                tone = OutcomeTone.WARNING,
-                footnote = "Start the tunnel from the VPN restriction screen.",
-            )
-        } else {
-            OutcomeCard(
-                headline = "Ads are being removed device-wide",
-                detail = "Ad and tracker hosts are refused for every app on this device, and the " +
-                    "built-in player and browser strip them at the request level as well.",
-                tone = OutcomeTone.SUCCESS,
-            )
-        }
+        OutcomeCard(
+            headline = "Ads are removed here, not everywhere",
+            detail = "Inside the built-in player and browser, ad requests are refused and ad " +
+                "slots are hidden. In other apps it depends on the resolver Private DNS points " +
+                "at: AdGuard Family refuses common ad and tracker hosts for every app; " +
+                "CleanBrowsing and Cloudflare do not.",
+            tone = OutcomeTone.WARNING,
+            footnote = "An ad served from the same host as the content, like YouTube's own, " +
+                "cannot be refused by any resolver.",
+        )
 
         ProtectionSection(title = "Settings", icon = Icons.Rounded.Tune) {
             SettingSwitchRow(
@@ -95,7 +88,6 @@ fun AdRemovalScreen(viewModel: AdRemovalViewModel) {
         }
 
         ProtectionSection(title = "Where ads were removed", icon = Icons.Rounded.Block) {
-            DetailRow("In other apps, through the tunnel", state.tunnelAdsBlocked.toString())
             DetailRow("In the built-in player", state.playerAdsBlocked.toString())
             DetailRow("In the built-in browser", state.browserAdsBlocked.toString())
             Spacer(Modifier.height(10.dp))
@@ -128,8 +120,9 @@ fun AdRemovalScreen(viewModel: AdRemovalViewModel) {
 
         ProtectionSection(title = "What this can and cannot do", icon = Icons.Rounded.Insights) {
             BulletLine(
-                "Video ads in the YouTube app are fetched from ad hosts, and refusing those " +
-                    "names at the tunnel removes the ad break rather than leaving a gap.",
+                "Video ads in the built-in player are fetched from ad hosts, and refusing those " +
+                    "requests removes the ad break rather than leaving a gap. The YouTube app " +
+                    "itself is not covered.",
             )
             BulletLine(
                 "An app that serves its ads from the same address as its content cannot be " +

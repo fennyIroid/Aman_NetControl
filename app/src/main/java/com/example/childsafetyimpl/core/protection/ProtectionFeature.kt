@@ -27,12 +27,13 @@ enum class ProtectionFeature(
     VPN_RESTRICTION(
         id = "vpn_restriction",
         title = "VPN restriction",
-        summary = "Stops the child using a VPN app to get around filtering.",
-        mechanism = "Watches for any tunnel that is not ours, blocks VPN apps as they open, and " +
-            "reclaims the device tunnel so a third-party VPN cannot hold it.",
+        summary = "Stops the child using a VPN to get around filtering.",
+        mechanism = "Cancels Android's VPN connection request before it can be accepted, closes " +
+            "VPN apps as they open, and blocks every app but Settings and the phone while " +
+            "another VPN is connected. Uses no VPN of its own.",
         group = ProtectionGroup.NETWORK,
         requires = listOf(SafetyPermission.USAGE_ACCESS, SafetyPermission.OVERLAY),
-        strengthenedBy = listOf(SafetyPermission.VPN_CONSENT, SafetyPermission.ACCESSIBILITY),
+        strengthenedBy = listOf(SafetyPermission.ACCESSIBILITY),
     ),
 
     CLONE_CONTROL(
@@ -92,12 +93,12 @@ enum class ProtectionFeature(
     AD_REMOVAL(
         id = "ad_removal",
         title = "Ad removal",
-        summary = "Strips ads from video and web, in this app and across the device.",
-        mechanism = "Refuses ad and tracker hosts at the DNS layer for every app, and removes ad " +
-            "requests and ad slots inside the built-in player and browser.",
+        summary = "Strips ads from video and web in the built-in player and browser.",
+        mechanism = "Removes ad requests and ad slots inside the built-in player and browser. " +
+            "Other apps keep their ads: filtering runs through Private DNS, and a public " +
+            "resolver does not refuse ad hosts.",
         group = ProtectionGroup.NETWORK,
         requires = emptyList(),
-        strengthenedBy = listOf(SafetyPermission.VPN_CONSENT),
     ),
 
     IMAGE_BLURRING(
@@ -113,15 +114,14 @@ enum class ProtectionFeature(
     SEARCH_FILTERING(
         id = "search_filtering",
         title = "Search and site filtering",
-        summary = "Forces SafeSearch in every browser and closes searches for restricted things.",
-        mechanism = "Answers the name lookups Chrome and every other app make with the filtered " +
-            "address each search engine publishes, so SafeSearch cannot be switched off from " +
-            "inside the browser. Reads the address bar and search box of any browser and leaves " +
-            "the search when what is being looked for is restricted.",
+        summary = "Filters every app through Private DNS and closes searches for restricted things.",
+        mechanism = "Android's Private DNS sends every name lookup on the device to a filtering " +
+            "resolver, which refuses harmful sites and forces SafeSearch. Reads the address bar " +
+            "and search box of any browser, applies your own site lists there, and leaves the " +
+            "search when what is being looked for is restricted.",
         group = ProtectionGroup.NETWORK,
         requires = emptyList(),
         strengthenedBy = listOf(
-            SafetyPermission.VPN_CONSENT,
             SafetyPermission.ACCESSIBILITY,
             SafetyPermission.OVERLAY,
         ),

@@ -61,6 +61,11 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <!-- Home screens, which a VPN lockout must never cover. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <category android:name="android.intent.category.BROWSABLE" />
@@ -227,12 +232,13 @@
         </service>
 
         <!--
-            The filtering tunnel: blocked destinations and ad hosts refused device-wide, and the
-            single VPN slot held so a third-party VPN cannot take it.
+            Internet Pause, and nothing else. Filtering runs through Android's Private DNS with
+            no tunnel; this is raised only while a parent has the internet paused, holds the VPN
+            slot so nothing can be carried, and goes away when the pause is lifted.
             BIND_VPN_SERVICE is enforced by the system.
         -->
         <service
-            android:name=".platform.network.ChildSafetyVpnService"
+            android:name=".platform.network.PauseTunnelService"
             android:exported="false"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:stopWithTask="false"
@@ -242,7 +248,7 @@
             </intent-filter>
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="DNS-level content and advertising filtering, and VPN bypass prevention." />
+                android:value="Parent-requested internet pause: holds the VPN slot and carries nothing while paused." />
         </service>
 
         <!--

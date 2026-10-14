@@ -8,6 +8,8 @@ import com.example.childsafetyimpl.domain.model.EventSeverity
 import com.example.childsafetyimpl.domain.model.SafetyEventType
 import com.example.childsafetyimpl.domain.repository.SafetyEventRepository
 import com.example.childsafetyimpl.domain.repository.SafetyRulesRepository
+import com.example.childsafetyimpl.platform.network.DirectAddress
+import com.example.childsafetyimpl.platform.network.ProxyOrigin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,10 +21,15 @@ import javax.inject.Singleton
 /**
  * What happens when a child searches for something restricted in a browser this app does not own.
  *
- * The tunnel forces SafeSearch, which strips explicit imagery out of results in every browser on
- * the device. It stops there by design: a search engine does not treat "how to buy cocaine" as
- * adult content and is right not to. This guard covers what SafeSearch leaves, by reading the
- * words the child actually searched for.
+ * The Private DNS resolver forces SafeSearch, which strips explicit imagery out of results in every
+ * browser on the device. It stops there by design: a search engine does not treat "how to buy
+ * cocaine" as adult content and is right not to. This guard covers what SafeSearch leaves, by
+ * reading the words the child actually searched for.
+ *
+ * It is also where the parent's own site rules reach browsers this app does not own. A public
+ * resolver cannot hold one family's block and allow lists, so a typed address is judged on the
+ * device against the same rules the built-in browser uses, and the browser is left when it is
+ * refused.
  *
  * Leaving is done by going home rather than by going back. Back returns to the search box with
  * the query still sitting in it, which fires again on the next screen and leaves the child in a
@@ -65,15 +72,11 @@ class SearchTermGuard @Inject constructor(
     private val _lastBlocked = MutableStateFlow<Blocked?>(null)
     val lastBlocked: StateFlow<Blocked?> = _lastBlocked.asStateFlow()
 
-    /**
-     * The last thing that matched, and when.
-     *
-     * A results page fires a content-changed event several times a second, and without this the
-     * same search produces a stream of identical records. Only the fingerprint is kept, so
-     * nothing about the search survives the comparison.
-     */
-    private var lastMatchFingerprint: Int = 0
-    private var lastMatchAt: Long = 0
+    // There is no repeat window here. One used to return Allow for the same match inside 20
+    // seconds, to keep a results page from writing a stream of records, and on a device that
+    // meant a refused site opened a second time within 20 seconds simply loaded. A stream of
+    // identical records is already prevented twice over: the service's close cooldown, and the
+    // event repository's dedupe window in onClosed. Every match closes.
 
     /**
      * Judges everything readable on a browser screen.
@@ -98,7 +101,6 @@ class SearchTermGuard @Inject constructor(
 
             val term = words?.let { BlockedSearchTerms.match(it) }
             if (term != null) {
-                if (!isFresh(term.text.hashCode())) return Verdict.Allow
                 return Verdict.Close(
                     category = term.category.label,
                     severe = term.category.severe,
@@ -109,17 +111,25 @@ class SearchTermGuard @Inject constructor(
                 )
             }
 
-            // A typed address is judged by the same rules the tunnel and the browser use, so a
-            // site already refused stays refused even where DNS filtering never applied.
-            val host = BrowserSurfaces.hostFrom(candidate) ?: continue
-            val verdict = rulesRepository.evaluateHost(host)
-            if (!verdict.allowed && isFresh(host.hashCode())) {
+            // A typed address is judged by the same rules the built-in browser uses, so the
+            // parent's own list applies where the public resolver cannot carry it. An address
+            // written as a number, or a site carried inside a relay's address, never reaches the
+            // resolver under its own name, so both are read back here and judged as the site.
+            val host = BrowserSurfaces.hostFrom(candidate)
+                ?: DirectAddress.fromAddressBar(candidate)?.address
+                ?: continue
+            for (target in listOfNotNull(host, ProxyOrigin.fromUrl(candidate)).distinct()) {
+                val verdict = rulesRepository.evaluateHost(target)
+                if (verdict.allowed) continue
                 return Verdict.Close(
-                    category = verdict.category?.label ?: "Restricted site",
+                    category = verdict.category?.label
+                        ?: if (DirectAddress.fromHost(target) != null) "Site opened by its address"
+                        else "Restricted site",
                     severe = false,
-                    reason = "$host is refused by " +
-                        (verdict.matchedPattern?.let { "the rule $it" } ?: "a category rule") +
-                        ", and it was opened in a browser outside this app.",
+                    reason = (if (target == host) "$host is" else "$host carries $target, which is") +
+                        " refused by " +
+                        (verdict.matchedPattern?.let { "the rule $it" } ?: "a filtering rule") +
+                        ", and it was opened in a browser outside this app. ${verdict.reason}",
                     childMessage = "That site is not available on this device.",
                     host = host,
                 )
@@ -145,10 +155,11 @@ class SearchTermGuard @Inject constructor(
 
         eventRepository.record(
             type = SafetyEventType.RESTRICTED_SEARCH,
-            title = if (succeeded) {
-                "A restricted search was closed in $appLabel"
-            } else {
-                "A restricted search was made in $appLabel"
+            title = when {
+                verdict.host != null && succeeded -> "A restricted site was closed in $appLabel"
+                verdict.host != null -> "A restricted site was opened in $appLabel"
+                succeeded -> "A restricted search was closed in $appLabel"
+                else -> "A restricted search was made in $appLabel"
             },
             // The category and the browser, never the search. What was typed is judged in memory
             // and dropped inside the call that read it.
@@ -168,20 +179,5 @@ class SearchTermGuard @Inject constructor(
 
     fun clearLastBlocked() {
         _lastBlocked.value = null
-    }
-
-    private fun isFresh(fingerprint: Int): Boolean {
-        val now = System.currentTimeMillis()
-        if (fingerprint == lastMatchFingerprint && now - lastMatchAt < REPEAT_WINDOW_MILLIS) {
-            return false
-        }
-        lastMatchFingerprint = fingerprint
-        lastMatchAt = now
-        return true
-    }
-
-    private companion object {
-        /** Long enough that one results page produces one record, short enough to catch a retry. */
-        const val REPEAT_WINDOW_MILLIS = 20_000L
     }
 }

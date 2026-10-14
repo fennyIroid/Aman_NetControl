@@ -176,7 +176,6 @@ fun DashboardScreen(viewModel: DashboardViewModel) {
                             viewModel.onEvent(DashboardUiEvent.ToggleInternetPause)
                         }
                     },
-                    onOpenControls = { viewModel.onEvent(DashboardUiEvent.OpenControls) },
                 )
 
                 if (state.needsAttention.isNotEmpty()) {
@@ -516,7 +515,6 @@ private fun HealthCard(state: DashboardUiState) {
 private fun InternetPauseCard(
     state: DashboardUiState,
     onToggle: () -> Unit,
-    onOpenControls: () -> Unit,
 ) {
     val mismatch = state.internetPaused && !state.internetPauseEnforced
     SafetyCard {
@@ -545,8 +543,6 @@ private fun InternetPauseCard(
                             "pause back; if it cannot, allow the connection request again."
                         state.internetPaused -> "Wi-Fi and mobile data are both stopped. Apps " +
                             "that work offline still work."
-                        !state.pauseAvailable -> "Private DNS on its own cannot pause the " +
-                            "internet. Change how filtering works on the Controls tab."
                         else -> "Stop all internet on this device at once."
                     },
                     style = MaterialTheme.typography.bodySmall,
@@ -572,16 +568,10 @@ private fun InternetPauseCard(
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            state.pauseAvailable -> SecondaryButton(
+            else -> SecondaryButton(
                 text = "Pause the internet",
                 onClick = onToggle,
                 contentColor = SafetyPalette.Danger,
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            else -> SecondaryButton(
-                text = "Open Controls",
-                onClick = onOpenControls,
                 modifier = Modifier.fillMaxWidth(),
             )
         }

@@ -156,6 +156,15 @@ object SecureFrame {
  * exists to prevent. Keeping covers up a moment too long over a tab that really did turn normal
  * costs nothing (rule 12). A frame too covered to tell ([SecureFrame.isBlackedOut] returning null)
  * changes nothing either way, so the covers can never argue themselves down.
+ *
+ * A still screen is the exception to needing a second frame, because it never sends one: a virtual
+ * display produces a frame only when something on it changes (rule 28). Leaving a private tab for
+ * a normal one and then reading it produces one frame, and the cover stood over the normal page
+ * until the child scrolled — driven on a Galaxy M36, a box stayed over the Google logo on an
+ * ordinary results page. So [confirmStill]: when the latest frame was clear and no frame has
+ * arrived for [EXIT_AFTER_MILLIS], the screen has not changed since, that frame is what is on it
+ * now, and the evidence has held for as long as two frames would have shown. Mid-scroll this never
+ * applies, because frames keep arriving and each one moves [lastFrameAt].
  */
 class PrivateTabTracker {
 
@@ -165,8 +174,10 @@ class PrivateTabTracker {
     private var clearFrames = 0
     private var clearSince = 0L
     private var lastClearAt = 0L
+    private var lastFrameAt = 0L
 
     fun next(foreground: String, foregroundIsBrowser: Boolean, blackedOut: Boolean?, now: Long): String? {
+        lastFrameAt = now
         when {
             foregroundIsBrowser && blackedOut == true -> {
                 current = foreground
@@ -184,6 +195,16 @@ class PrivateTabTracker {
                 if (clearFrames >= EXIT_AFTER_FRAMES && now - clearSince >= EXIT_AFTER_MILLIS) end()
             }
         }
+        return current
+    }
+
+    /**
+     * Ends the tab if the screen has stayed still since a clear frame; see the class comment.
+     * Returns what is current afterwards.
+     */
+    fun confirmStill(now: Long): String? {
+        val latestWasClear = clearFrames > 0 && lastClearAt == lastFrameAt
+        if (current != null && latestWasClear && now - lastFrameAt >= EXIT_AFTER_MILLIS) end()
         return current
     }
 

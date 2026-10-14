@@ -10,6 +10,7 @@ import com.example.childsafetyimpl.navigation.Routes
 import com.example.childsafetyimpl.navigation.ViewModelNav
 import com.example.childsafetyimpl.navigation.ViewModelNavImpl
 import com.example.childsafetyimpl.platform.network.InternetPauseController
+import com.example.childsafetyimpl.platform.network.VpnGuard
 import com.example.childsafetyimpl.ux.protection.ProtectionRunner
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -80,8 +81,7 @@ class DashboardViewModel @Inject constructor(
      * Never asked for when lifting a pause, which needs no permission.
      */
     fun pauseConsentIntent(): Intent? =
-        if (uiState.value.internetPaused || !uiState.value.pauseAvailable) null
-        else runCatching { android.net.VpnService.prepare(context) }.getOrNull()
+        if (uiState.value.internetPaused) null else VpnGuard.ownConsentIntent(context)
 
     private fun go(route: String) = navigate(NavigationAction.To(route))
 }

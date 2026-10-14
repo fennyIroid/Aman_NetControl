@@ -1,8 +1,6 @@
 package com.example.childsafetyimpl.ux.protection
 
-import android.content.Intent
 import android.net.VpnService
-import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.childsafetyimpl.core.protection.ProtectionFeature
@@ -15,8 +13,7 @@ import com.example.childsafetyimpl.navigation.Routes
 import com.example.childsafetyimpl.navigation.ViewModelNav
 import com.example.childsafetyimpl.navigation.ViewModelNavImpl
 import com.example.childsafetyimpl.platform.enforcement.MonitoringService
-import com.example.childsafetyimpl.platform.network.ChildSafetyVpnService
-import com.example.childsafetyimpl.platform.network.TunnelMode
+import com.example.childsafetyimpl.platform.network.PauseTunnelService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -126,64 +123,42 @@ class ProtectionRunner @Inject constructor(
 ) {
 
     /**
-     * Whether the filtering posture wants a tunnel running right now, or null before the first
-     * read. Cached because [apply] is called from places that cannot suspend.
+     * Whether a pause is saved, or null before the first read. Cached because [apply] is called
+     * from places that cannot suspend.
      *
-     * In the Private DNS postures the tunnel exists only for a pause. Before the first read the
-     * answer is unknown and the start goes ahead: the tunnel service reads the same settings
-     * itself and stands down if it is not wanted, so the worst case is a notification that
-     * appears for a moment, never a filter in front of the resolver.
+     * Filtering needs no service at all — it is Android's Private DNS — so the only tunnel this
+     * ever starts is the pause, and only when one is saved. Before the first read the start goes
+     * ahead: the pause service reads the same setting itself and stands down if there is no pause,
+     * so the worst case is a notification that appears for a moment.
      */
-    @Volatile private var tunnelWanted: Boolean? = null
+    @Volatile private var pauseWanted: Boolean? = null
 
     init {
         scope.launch {
-            preferences.settings.collect { settings ->
-                tunnelWanted = TunnelMode.restingFor(
-                    settings.filteringMode,
-                    settings.internetPaused,
-                ) != null
-            }
+            preferences.settings.collect { settings -> pauseWanted = settings.internetPaused }
         }
     }
 
     fun apply(enabled: Boolean) {
         if (enabled) {
             MonitoringService.start(context)
-            startTunnelIfAllowed()
+            resumePauseIfAllowed()
         } else {
             MonitoringService.stop(context)
-            stopTunnel()
+            PauseTunnelService.stop(context)
         }
     }
 
     /**
-     * Starts the filtering tunnel, but only where consent already exists.
+     * Puts a saved pause back, but only where consent already exists.
      *
-     * VpnService.prepare returning an intent means the user has never allowed the tunnel, and that
-     * dialog can only be raised by an Activity. Trying anyway from here would throw; asking is the
-     * Controls screen's job, and this quietly does nothing until it has been asked.
+     * VpnService.prepare returning an intent means the user has never allowed the pause, and that
+     * dialog can only be raised by an Activity. Asking is the pause button's job.
      */
-    private fun startTunnelIfAllowed() {
-        if (tunnelWanted == false) return
+    private fun resumePauseIfAllowed() {
+        if (pauseWanted == false) return
         val consentNeeded = runCatching { VpnService.prepare(context) != null }.getOrDefault(true)
         if (consentNeeded) return
-        runCatching {
-            val intent = Intent(context, ChildSafetyVpnService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
-        }
-    }
-
-    private fun stopTunnel() {
-        runCatching {
-            context.startService(
-                Intent(context, ChildSafetyVpnService::class.java)
-                    .setAction(ChildSafetyVpnService.ACTION_STOP),
-            )
-        }
+        runCatching { PauseTunnelService.start(context) }
     }
 }

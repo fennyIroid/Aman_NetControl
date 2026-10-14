@@ -21,7 +21,6 @@ import com.example.childsafetyimpl.platform.content.ValuesCategory
 import com.example.childsafetyimpl.platform.content.SubjectCategory
 import com.example.childsafetyimpl.platform.content.SafetyLabelRisk
 import com.example.childsafetyimpl.platform.network.AdBlockList
-import com.example.childsafetyimpl.platform.network.ChildSafetyVpnService
 import com.example.childsafetyimpl.platform.projection.ScreenAnalysisService
 import com.example.childsafetyimpl.platform.youtube.YouTubeSurface
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -40,14 +39,12 @@ data class AdRemovalUiState(
     val loading: Boolean = true,
     val status: ProtectionStatus? = null,
     val enabled: Boolean = true,
-    val tunnelRunning: Boolean = false,
-    val tunnelAdsBlocked: Int = 0,
     val browserAdsBlocked: Int = 0,
     val playerAdsBlocked: Int = 0,
     val hostCount: Int = AdBlockList.hostCount,
     val patternCount: Int = AdBlockList.patternCount,
 ) {
-    val totalBlocked: Int get() = tunnelAdsBlocked + browserAdsBlocked + playerAdsBlocked
+    val totalBlocked: Int get() = browserAdsBlocked + playerAdsBlocked
 }
 
 sealed interface AdRemovalUiEvent {
@@ -71,19 +68,15 @@ class GetAdRemovalUiStateUseCase @Inject constructor(
     suspend fun observe() {
         combine(
             statusProvider.observe(ProtectionFeature.AD_REMOVAL),
-            ChildSafetyVpnService.State.running,
-            ChildSafetyVpnService.State.counters,
             browserEngine.stats,
             combine(youTubeSurface.stats, preferences.settings) { player, settings ->
                 player to settings
             },
-        ) { status, running, counters, browser, playerAndSettings ->
+        ) { status, browser, playerAndSettings ->
             AdRemovalUiState(
                 loading = false,
                 status = status,
                 enabled = playerAndSettings.second.adBlockEnabled,
-                tunnelRunning = running,
-                tunnelAdsBlocked = counters.adsBlocked,
                 browserAdsBlocked = browser.adsBlocked,
                 playerAdsBlocked = playerAndSettings.first.adsBlocked,
             )

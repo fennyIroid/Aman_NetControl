@@ -13,7 +13,7 @@ import com.example.childsafetyimpl.domain.repository.SafetyEventRepository
 import com.example.childsafetyimpl.platform.accessibility.SurfaceGuard
 import com.example.childsafetyimpl.platform.admin.AdvancedProtectionProbe
 import com.example.childsafetyimpl.platform.enforcement.MonitoringService
-import com.example.childsafetyimpl.platform.network.ChildSafetyVpnService
+import com.example.childsafetyimpl.platform.network.PauseTunnelService
 import com.example.childsafetyimpl.platform.network.PrivateDnsGuard
 import com.example.childsafetyimpl.platform.usage.UsageStatsProvider
 import kotlinx.coroutines.Dispatchers
@@ -66,9 +66,8 @@ class GetDashboardUiStateUseCase @Inject constructor(
             MonitoringService.State.running,
             MonitoringService.State.vpnActive,
             MonitoringService.State.recentlyRevoked,
-            ChildSafetyVpnService.State.running,
-            ChildSafetyVpnService.State.paused,
-        ) { _, _, _, _, _ -> Unit }
+            PauseTunnelService.State.running,
+        ) { _, _, _, _ -> Unit }
 
         combine(
             preferences.settings,
@@ -104,7 +103,6 @@ class GetDashboardUiStateUseCase @Inject constructor(
                 },
                 internetPaused = settings.internetPaused,
                 internetPauseEnforced = pauseEnforced(),
-                pauseAvailable = settings.filteringMode.canPauseInternet,
                 health = buildHealth(settings, statuses),
             )
         }
@@ -115,8 +113,7 @@ class GetDashboardUiStateUseCase @Inject constructor(
 
     fun setPauseMessage(message: String?) = _uiState.update { it.copy(pauseMessage = message) }
 
-    private fun pauseEnforced(): Boolean =
-        ChildSafetyVpnService.State.running.value && ChildSafetyVpnService.State.paused.value
+    private fun pauseEnforced(): Boolean = PauseTunnelService.State.running.value
 
     /**
      * Builds the health picture from what is true right now.
@@ -128,17 +125,12 @@ class GetDashboardUiStateUseCase @Inject constructor(
         settings: SafetySettings,
         statuses: List<ProtectionStatus>,
     ): ProtectionHealth {
-        val filtering = settings.filteringMode
-        val posture = privateDnsGuard.currentPosture()
-
-        // What counts as a problem depends on the posture. With the tunnel, any named resolver
-        // is a way around it. With Private DNS, the setting is the filter, so it being unset or
-        // pointed somewhere that does not filter is the problem, and a filtering resolver is the
-        // correct state rather than a bypass.
-        val (bypassing, host) = when (posture) {
+        // Private DNS is the filter, so it being unset or pointed somewhere that does not filter
+        // is the problem, and a filtering resolver is the correct state.
+        val (bypassing, host) = when (val posture = privateDnsGuard.currentPosture()) {
             is PrivateDnsGuard.Posture.ForeignResolver -> true to posture.host
-            is PrivateDnsGuard.Posture.Filtering -> !filtering.usesPrivateDns to posture.host
-            PrivateDnsGuard.Posture.NotConfigured -> filtering.usesPrivateDns to null
+            is PrivateDnsGuard.Posture.Filtering -> false to posture.host
+            PrivateDnsGuard.Posture.NotConfigured -> true to null
             is PrivateDnsGuard.Posture.Unknown -> false to null
         }
 
@@ -158,7 +150,6 @@ class GetDashboardUiStateUseCase @Inject constructor(
             internetPauseEnforced = pauseEnforced(),
             advancedProtectionOn =
                 advancedProtectionProbe.current() == AdvancedProtectionProbe.Mode.ON,
-            privateDnsIsTheFilter = filtering.usesPrivateDns,
         )
     }
 

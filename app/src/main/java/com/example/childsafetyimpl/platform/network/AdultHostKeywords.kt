@@ -29,6 +29,12 @@ object AdultHostKeywords {
         "seks", "sikis", "bokep", "yadong",
         // Non-Latin scripts: Chinese, Korean, Russian, Arabic, Thai
         "色情", "야동", "порно", "سكس", "หนังโป๊",
+        // Arabic-market compounds. Measured on the Tranco top million: 31 sites caught, every one
+        // adult, none refused that was not. The short words these are built from ("nik", "sks",
+        // "neek") refuse a Polish government office and a key server, and are left out.
+        "arabsex", "sexarab", "sexalarab", "sexelarab", "sexlilarab", "xnxxarab", "arabxnxx",
+        "aflamsex", "sexaflam", "arabporn", "pornarabi", "pornoarabi", "arabnude", "arabnudes",
+        "نيك", "شرموطة", "قحبة",
     )
 
     private val supportWords = listOf(

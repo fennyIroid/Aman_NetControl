@@ -1,0 +1,46 @@
+                                              KAHF   CleanBrowsing      Cloudflare         AdGuard
+-- web proxy
+croxyproxy.com                               BLOCK           BLOCK   104.21.90.167   104.21.90.167
+www.croxyproxy.com                           BLOCK           BLOCK   172.67.158.52   172.67.158.52
+proxysite.com                                BLOCK           BLOCK    104.26.8.204   172.67.72.226
+www.proxysite.com                            BLOCK           BLOCK    104.26.8.204    104.26.8.204
+kproxy.com                                   BLOCK           BLOCK  149.202.98.191  149.202.98.191
+hidester.com                                 BLOCK           BLOCK  67.205.183.195  67.205.183.195
+4everproxy.com                               BLOCK           BLOCK   104.21.24.111   104.21.24.111
+proxyium.com                                 BLOCK           BLOCK   104.21.15.136  172.67.162.169
+blockaway.net                                BLOCK           BLOCK    104.21.40.78  172.67.181.119
+hide.me                                      BLOCK           BLOCK    15.235.210.6    15.235.210.6
+-- browser DoH
+dns.google                                   BLOCK           BLOCK         8.8.4.4         8.8.4.4
+cloudflare-dns.com                           BLOCK           BLOCK  104.16.249.249  104.16.249.249
+mozilla.cloudflare-dns.com                   BLOCK           BLOCK    162.159.61.4    162.159.61.4
+chrome.cloudflare-dns.com                    BLOCK           BLOCK    162.159.61.3    162.159.61.3
+dns.quad9.net                                BLOCK           BLOCK 149.112.112.112 149.112.112.112
+doh.opendns.com                              BLOCK           BLOCK    146.112.41.2    146.112.41.2
+dns.nextdns.io                               BLOCK           BLOCK    65.20.73.163   45.120.139.25
+dns.adguard-dns.com                          BLOCK           BLOCK    94.140.14.14    94.140.15.15
+doh.cleanbrowsing.org                        BLOCK  185.228.168.10 185.228.168.168 185.228.168.168
+dns11.quad9.net                              BLOCK           BLOCK        9.9.9.11        9.9.9.11
+-- VPN sites
+nordvpn.com                                  BLOCK           BLOCK  104.16.208.203  104.19.159.190
+expressvpn.com                               BLOCK           BLOCK    99.86.147.27   99.86.147.116
+protonvpn.com                                BLOCK           BLOCK 185.159.159.140 185.159.159.140
+surfshark.com                                BLOCK           BLOCK   104.18.121.34   104.18.120.34
+windscribe.com                               BLOCK           BLOCK    104.20.1.154    104.20.2.154
+psiphon.ca                                   BLOCK           BLOCK   104.18.14.196   104.18.14.196
+hotspotshield.com                            BLOCK           BLOCK   52.35.173.136    52.25.64.222
+tunnelbear.com                               BLOCK           BLOCK  104.17.154.236  104.17.155.236
+one.one.one.one                              BLOCK           BLOCK         1.0.0.1         1.1.1.1
+urban-vpn.com                                BLOCK           BLOCK  162.159.134.42  162.159.134.42
+-- IP-in-name
+66-254-114-41.sslip.io                       BLOCK   66.254.114.41   66.254.114.41   66.254.114.41
+66.254.114.41.nip.io                 66.254.114.41   66.254.114.41   66.254.114.41   66.254.114.41
+-- relays
+translate.goog                      74.125.130.132           BLOCK    172.217.24.1  64.233.176.132
+www-pornhub-com.translate.goog             0.0.0.0           BLOCK           BLOCK 172.253.124.132
+web.archive.org                      207.241.237.3           BLOCK   207.241.237.3   207.241.237.3
+-- search
+www.google.com                      216.239.38.120  216.239.38.120  216.239.38.120  216.239.38.120
+www.bing.com                         150.171.27.16   150.171.28.16   150.171.28.16   150.171.30.16
+duckduckgo.com                       20.207.72.188   20.43.161.151   20.207.72.188   20.43.161.151
+www.youtube.com                     216.239.38.120  216.239.38.119   142.251.155.4  216.239.38.119

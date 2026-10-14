@@ -3,7 +3,6 @@ package com.example.childsafetyimpl.ux.protection
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.childsafetyimpl.core.protection.ProtectionFeature
-import com.example.childsafetyimpl.core.protection.ProtectionState
 import com.example.childsafetyimpl.core.protection.ProtectionStatus
 import com.example.childsafetyimpl.core.protection.ProtectionStatusProvider
 import com.example.childsafetyimpl.data.prefs.SafetyPreferences
@@ -12,7 +11,8 @@ import com.example.childsafetyimpl.domain.model.VpnPosture
 import com.example.childsafetyimpl.navigation.NavigationAction
 import com.example.childsafetyimpl.navigation.ViewModelNav
 import com.example.childsafetyimpl.navigation.ViewModelNavImpl
-import com.example.childsafetyimpl.platform.network.ChildSafetyVpnService
+import com.example.childsafetyimpl.platform.accessibility.ScreenSignalStore
+import com.example.childsafetyimpl.platform.admin.NetworkLockdown
 import com.example.childsafetyimpl.platform.network.VpnGuard
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -29,11 +29,18 @@ data class VpnProtectionUiState(
     val loading: Boolean = true,
     val status: ProtectionStatus? = null,
     val posture: VpnPosture? = null,
-    val tunnelRunning: Boolean = false,
-    val counters: ChildSafetyVpnService.State.Counters = ChildSafetyVpnService.State.Counters(),
     val blockVpnApps: Boolean = true,
-    val reclaimTunnel: Boolean = true,
+    val vpnLockout: Boolean = true,
     val blockVpnSettings: Boolean = true,
+    /** Connection requests cancelled before a VPN could start. */
+    val refusedRequests: Int = 0,
+    val blockedLaunches: Int = 0,
+    /** Apps refused because a VPN was up. */
+    val lockouts: Int = 0,
+    /** Whether the accessibility service is connected, which refusing a request needs. */
+    val canRefuseRequests: Boolean = false,
+    /** True when device policy forbids VPN setup outright, on a managed device. */
+    val vpnForbiddenByPolicy: Boolean = false,
     val scanning: Boolean = false,
 ) {
     val vpnApps: List<InstalledApp> get() = posture?.installedVpnApps.orEmpty()
@@ -43,38 +50,50 @@ sealed interface VpnProtectionUiEvent {
     data object Back : VpnProtectionUiEvent
     data class ToggleFeature(val enabled: Boolean) : VpnProtectionUiEvent
     data class ToggleBlockApps(val enabled: Boolean) : VpnProtectionUiEvent
-    data class ToggleReclaim(val enabled: Boolean) : VpnProtectionUiEvent
+    data class ToggleLockout(val enabled: Boolean) : VpnProtectionUiEvent
     data class ToggleBlockSettings(val enabled: Boolean) : VpnProtectionUiEvent
     data object Rescan : VpnProtectionUiEvent
-    data object ReclaimNow : VpnProtectionUiEvent
 }
 
 class GetVpnProtectionUiStateUseCase @Inject constructor(
     private val statusProvider: ProtectionStatusProvider,
     private val vpnGuard: VpnGuard,
     private val preferences: SafetyPreferences,
+    private val signalStore: ScreenSignalStore,
+    private val networkLockdown: NetworkLockdown,
 ) {
 
     private val _uiState = MutableStateFlow(VpnProtectionUiState())
     val uiState: StateFlow<VpnProtectionUiState> = _uiState.asStateFlow()
 
     suspend fun observe() {
+        val counts = combine(
+            vpnGuard.refusedRequests,
+            vpnGuard.blockedLaunches,
+            vpnGuard.lockouts,
+        ) { refused, launches, lockouts -> Triple(refused, launches, lockouts) }
+
         combine(
             statusProvider.observe(ProtectionFeature.VPN_RESTRICTION),
             vpnGuard.posture,
-            ChildSafetyVpnService.State.running,
-            ChildSafetyVpnService.State.counters,
             preferences.settings,
-        ) { status, posture, running, counters, settings ->
+            counts,
+            combine(signalStore.connected, networkLockdown.applied) { connected, lockdown ->
+                connected to lockdown.vpnConfigBlocked
+            },
+        ) { status, posture, settings, count, access ->
             VpnProtectionUiState(
                 loading = false,
                 status = status,
                 posture = posture,
-                tunnelRunning = running,
-                counters = counters,
                 blockVpnApps = settings.blockVpnApps,
-                reclaimTunnel = settings.reclaimTunnel,
+                vpnLockout = settings.vpnLockout,
                 blockVpnSettings = settings.blockVpnSettings,
+                refusedRequests = count.first,
+                blockedLaunches = count.second,
+                lockouts = count.third,
+                canRefuseRequests = access.first,
+                vpnForbiddenByPolicy = access.second,
                 scanning = _uiState.value.scanning,
             )
         }.collect { state -> _uiState.update { state } }
@@ -95,7 +114,6 @@ class GetVpnProtectionUiStateUseCase @Inject constructor(
 class VpnProtectionViewModel @Inject constructor(
     private val useCase: GetVpnProtectionUiStateUseCase,
     private val preferences: SafetyPreferences,
-    private val vpnGuard: VpnGuard,
 ) : ViewModel(), ViewModelNav by ViewModelNavImpl() {
 
     val uiState: StateFlow<VpnProtectionUiState> = useCase.uiState
@@ -118,8 +136,8 @@ class VpnProtectionViewModel @Inject constructor(
                 preferences.setBlockVpnApps(event.enabled)
             }
 
-            is VpnProtectionUiEvent.ToggleReclaim -> viewModelScope.launch {
-                preferences.setReclaimTunnel(event.enabled)
+            is VpnProtectionUiEvent.ToggleLockout -> viewModelScope.launch {
+                preferences.setVpnLockout(event.enabled)
             }
 
             is VpnProtectionUiEvent.ToggleBlockSettings -> viewModelScope.launch {
@@ -127,15 +145,6 @@ class VpnProtectionViewModel @Inject constructor(
             }
 
             VpnProtectionUiEvent.Rescan -> viewModelScope.launch { useCase.rescan() }
-
-            VpnProtectionUiEvent.ReclaimNow -> viewModelScope.launch {
-                vpnGuard.reclaimTunnel()
-                useCase.rescan()
-            }
         }
     }
-
-    /** True when the protection is on but the tunnel it would reclaim was never consented to. */
-    fun reclaimUnavailable(state: VpnProtectionUiState): Boolean =
-        state.status?.state != ProtectionState.OFF && !state.tunnelRunning
 }

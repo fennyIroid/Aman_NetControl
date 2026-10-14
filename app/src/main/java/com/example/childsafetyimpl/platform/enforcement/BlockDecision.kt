@@ -23,6 +23,15 @@ sealed interface BlockReason {
     /** A VPN client, closed because VPN use is restricted. */
     data object VpnApp : BlockReason
 
+    /**
+     * Another VPN is connected, so nothing but Settings and the phone can be used until it is
+     * switched off.
+     *
+     * Not about the app in front at all, which is why the block screen offers VPN settings rather
+     * than a reason to come back later: the way to get this app back is to end the VPN.
+     */
+    data object VpnActive : BlockReason
+
     /** A cloning tool or a cloned instance, closed because app cloning is restricted. */
     data object CloneApp : BlockReason
 

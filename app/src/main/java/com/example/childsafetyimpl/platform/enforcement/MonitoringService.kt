@@ -3,6 +3,7 @@ package com.example.childsafetyimpl.platform.enforcement
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -20,12 +21,14 @@ import com.example.childsafetyimpl.domain.model.SafetyEventType
 import com.example.childsafetyimpl.domain.repository.SafetyEventRepository
 import com.example.childsafetyimpl.domain.repository.SafetyRulesRepository
 import com.example.childsafetyimpl.platform.admin.AdvancedProtectionProbe
+import com.example.childsafetyimpl.platform.admin.NetworkLockdown
 import com.example.childsafetyimpl.platform.ai.AiActivityMonitor
 import com.example.childsafetyimpl.platform.alerts.SafetyNotifier
 import com.example.childsafetyimpl.platform.clone.CloneGuard
 import com.example.childsafetyimpl.platform.network.VpnGuard
 import com.example.childsafetyimpl.platform.network.InternetPauseController
 import com.example.childsafetyimpl.platform.network.PrivateDnsGuard
+import com.example.childsafetyimpl.platform.network.VpnLockout
 import com.example.childsafetyimpl.platform.permission.PermissionInspector
 import com.example.childsafetyimpl.platform.projection.ScreenAnalysisService
 import com.example.childsafetyimpl.platform.usage.AppInventoryProvider
@@ -55,10 +58,10 @@ import javax.inject.Inject
  *
  *  1. Re-checks the privileged grants, so a permission being switched off becomes an event rather
  *     than a silent gap in protection.
- *  2. Refreshes the VPN posture and reclaims the tunnel if a foreign VPN has taken it.
+ *  2. Refreshes the VPN posture, and on a managed device puts the DNS and VPN policies back.
  *  3. Reads the foreground app.
- *  4. Decides whether that app should be closed: a VPN client, a cloning tool, an app the parent
- *     switched off, a schedule, a limit, or a category budget.
+ *  4. Decides whether that app should be closed: a VPN client, any app while another VPN is up,
+ *     a cloning tool, an app the parent switched off, a schedule, a limit, or a category budget.
  *  5. Closes it by showing the block screen, and records whether that actually worked.
  *
  * The order in step four is not arbitrary. A VPN or clone verdict is a set lookup, a rule check
@@ -82,6 +85,7 @@ class MonitoringService : Service() {
     @Inject lateinit var internetPauseController: InternetPauseController
     @Inject lateinit var privateDnsGuard: PrivateDnsGuard
     @Inject lateinit var advancedProtectionProbe: AdvancedProtectionProbe
+    @Inject lateinit var networkLockdown: NetworkLockdown
 
     @Inject @ApplicationScope lateinit var scope: CoroutineScope
 
@@ -101,6 +105,16 @@ class MonitoringService : Service() {
     /** The last Private DNS posture seen, so a change is reported once rather than every tick. */
     private var lastPrivateDnsPosture: PrivateDnsGuard.Posture? = null
     private var lastAdvancedProtection: AdvancedProtectionProbe.Mode? = null
+
+    /**
+     * Consecutive ticks a foreign tunnel has been seen. The lockout waits for two, because the
+     * pause tunnel's own interface can outlive it by a moment, and a phone that locks itself for
+     * a second every time a parent lifts a pause would teach everyone to ignore the lock.
+     */
+    private var foreignVpnTicks = 0
+
+    /** Home-screen packages, which stay usable while a VPN is up. Refreshed with the clone scan. */
+    private var launcherPackages: Set<String> = emptySet()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -142,6 +156,7 @@ class MonitoringService : Service() {
             runCatching {
                 val settings = preferences.settings.first()
                 if (!settings.protectionEnabled) {
+                    applyNetworkLockdown(settings)
                     overlayController.hideAll()
                     State.setForegroundPackage(null)
                     delay(POLL_INTERVAL_MILLIS)
@@ -149,19 +164,20 @@ class MonitoringService : Service() {
                 }
 
                 checkGrantChanges()
+                applyNetworkLockdown(settings)
                 checkVpnPosture(settings)
                 checkCaptureAlive(settings)
                 checkInternetPause(settings)
-                checkPrivateDns(settings)
+                checkPrivateDns()
                 checkAdvancedProtection()
 
                 // The clone scan walks every launcher entry in every profile, which is far too
-                // expensive to do every two seconds and far too useful to do only on demand.
-                if (settings.isEnabled(ProtectionFeature.CLONE_CONTROL)) {
-                    if (ticksSinceScan++ >= TICKS_BETWEEN_CLONE_SCANS) {
-                        ticksSinceScan = 0
-                        cloneGuard.scan()
-                    }
+                // expensive to do every two seconds and far too useful to do only on demand. The
+                // home-screen list rides on the same timer, and is read on the first tick too.
+                if (launcherPackages.isEmpty() || ticksSinceScan++ >= TICKS_BETWEEN_CLONE_SCANS) {
+                    ticksSinceScan = 0
+                    launcherPackages = resolveLaunchers()
+                    if (settings.isEnabled(ProtectionFeature.CLONE_CONTROL)) cloneGuard.scan()
                 }
 
                 when (val foreground = usageStatsProvider.currentForegroundApp()) {
@@ -223,6 +239,17 @@ class MonitoringService : Service() {
             if (block(packageName, label, BlockReason.VpnApp)) {
                 vpnGuard.onVpnAppBlocked(packageName, label)
             }
+            return
+        }
+
+        // Another VPN is up. This app holds no tunnel to take back, so the answer is that nothing
+        // but Settings and the phone can be used until it is switched off. See VpnLockout.
+        if (settings.isEnabled(ProtectionFeature.VPN_RESTRICTION) &&
+            settings.vpnLockout &&
+            State.vpnActive.value &&
+            !VpnLockout.isExempt(packageName, launcherPackages)
+        ) {
+            if (block(packageName, label, BlockReason.VpnActive)) vpnGuard.onLockout()
             return
         }
 
@@ -363,8 +390,12 @@ class MonitoringService : Service() {
 
     private suspend fun recordBlockEvent(decision: BlockDecision, action: EventAction) {
         // A VPN or clone block is recorded by its own guard, which knows more about why than this
-        // loop does. Recording it here as well would double every entry in the history.
-        if (decision.reason is BlockReason.VpnApp || decision.reason is BlockReason.CloneApp) return
+        // loop does. Recording it here as well would double every entry in the history. A
+        // lockout is recorded once per VPN by the guard, not once per app the child tries.
+        if (decision.reason is BlockReason.VpnApp ||
+            decision.reason is BlockReason.VpnActive ||
+            decision.reason is BlockReason.CloneApp
+        ) return
 
         val (type, featureId) = when (decision.reason) {
             is BlockReason.DailyLimitReached ->
@@ -376,7 +407,7 @@ class MonitoringService : Service() {
             -> SafetyEventType.SCHEDULE_BLOCK to ProtectionFeature.APP_RESTRICTION.id
             BlockReason.AlwaysBlocked ->
                 SafetyEventType.RESTRICTED_APP_OPENED to ProtectionFeature.APP_RESTRICTION.id
-            BlockReason.VpnApp, BlockReason.CloneApp ->
+            BlockReason.VpnApp, BlockReason.VpnActive, BlockReason.CloneApp ->
                 SafetyEventType.RESTRICTED_APP_OPENED to ProtectionFeature.APP_RESTRICTION.id
             is BlockReason.RoutineRestriction ->
                 SafetyEventType.ROUTINE_RESTRICTION to ProtectionFeature.APP_RESTRICTION.id
@@ -415,6 +446,8 @@ class MonitoringService : Service() {
             "This app is switched off by a parent."
         BlockReason.VpnApp ->
             "VPN apps are restricted on this device."
+        BlockReason.VpnActive ->
+            "A VPN is on, and apps stay closed until it is switched off."
         BlockReason.CloneApp ->
             "App cloning is restricted on this device."
         is BlockReason.RoutineRestriction ->
@@ -461,13 +494,13 @@ class MonitoringService : Service() {
     }
 
     /**
-     * Keeps the parent's pause and the tunnel in agreement, and says so when it cannot.
+     * Keeps the parent's pause and the pause tunnel in agreement, and says so when it cannot.
      *
      * The tunnel restores a pause whenever Android restarts it, but a manufacturer's task killer
      * can end the process on a build that never restarts sticky services, and then nothing is
      * left running to do it. This loop is what survives, so it re-applies the pause, and only when
      * that is impossible — VPN consent withdrawn — does it tell the parent. A short grace comes
-     * first because applying a pause rebuilds the tunnel and the two disagree for a moment.
+     * first because raising the pause tunnel takes a moment and the two disagree while it does.
      */
     private suspend fun checkInternetPause(settings: SafetySettings) {
         if (!settings.internetPaused || internetPauseController.isEnforced()) {
@@ -503,7 +536,7 @@ class MonitoringService : Service() {
                     "connection request again."
             } else {
                 "You paused the internet, but the pause could not be put back in force after " +
-                    "the filtering service stopped, so this device is online."
+                    "the pause tunnel stopped, so this device is online."
             },
             severity = EventSeverity.CRITICAL,
             action = EventAction.NOT_ENFORCEABLE,
@@ -513,25 +546,22 @@ class MonitoringService : Service() {
     }
 
     /**
-     * Watches the Private DNS setting in the postures that depend on it.
+     * Watches the Private DNS setting, which is the web filter.
      *
-     * In those postures that setting *is* the filter, so a child clearing it or pointing it at
-     * an unfiltered resolver switches web filtering off in three taps. Android offers no way to
-     * stop that; this is how the parent hears about it. Reported on a change rather than every
-     * tick, and a setting that was never completed is left to the setup screen and the dashboard
-     * rather than alerted on: a parent part-way through setup is being asked, not told.
+     * A child clearing it or pointing it at an unfiltered resolver switches web filtering off in
+     * three taps. On an unmanaged device Android offers no way to stop that beyond closing the
+     * settings screen on sight; this is how the parent hears about it when that fails. Reported on
+     * a change rather than every tick, and a setting that was never completed is left to the setup
+     * screen and the dashboard rather than alerted on: a parent part-way through setup is being
+     * asked, not told.
      */
-    private suspend fun checkPrivateDns(settings: SafetySettings) {
-        if (!settings.filteringMode.usesPrivateDns) {
-            lastPrivateDnsPosture = null
-            return
-        }
+    private suspend fun checkPrivateDns() {
         val posture = privateDnsGuard.currentPosture()
         val previous = lastPrivateDnsPosture
         lastPrivateDnsPosture = posture
         if (posture == previous) return
 
-        val advice = privateDnsGuard.explain(posture, settings.filteringMode)
+        val advice = privateDnsGuard.explain(posture)
         val wasFiltering = previous is PrivateDnsGuard.Posture.Filtering
         when (posture) {
             is PrivateDnsGuard.Posture.ForeignResolver -> eventRepository.record(
@@ -667,11 +697,58 @@ class MonitoringService : Service() {
     }
 
     private suspend fun checkVpnPosture(settings: SafetySettings) {
-        if (!settings.isEnabled(ProtectionFeature.VPN_RESTRICTION)) return
+        if (!settings.isEnabled(ProtectionFeature.VPN_RESTRICTION)) {
+            foreignVpnTicks = 0
+            State.setVpnActive(false)
+            return
+        }
         val posture = vpnGuard.refreshPosture()
-        State.setVpnActive(posture.foreignTunnelActive)
-        vpnGuard.onPosture(posture)
+        foreignVpnTicks = if (posture.foreignTunnelActive) foreignVpnTicks + 1 else 0
+        val active = foreignVpnTicks >= FOREIGN_VPN_CONFIRM_TICKS
+        State.setVpnActive(active)
+
+        if (!active) {
+            // The VPN went, so the lock goes with it rather than waiting for the child to close it.
+            if (overlayController.visible.value?.reason == BlockReason.VpnActive) {
+                overlayController.hide()
+            }
+            return
+        }
+        vpnGuard.onPosture(
+            posture,
+            lockoutPossible = settings.vpnLockout && overlayController.canShow(),
+        )
     }
+
+    /**
+     * On a managed device, sets Private DNS to the parent's resolver and locks it, and forbids
+     * VPN configuration. A no-op on every other device. See NetworkLockdown.
+     */
+    private fun applyNetworkLockdown(settings: SafetySettings) {
+        networkLockdown.apply(
+            protectionEnabled = settings.protectionEnabled,
+            privateDnsHost = settings.privateDnsHostname,
+            restrictVpn = settings.isEnabled(ProtectionFeature.VPN_RESTRICTION),
+            // The policy would refuse this app's own pause tunnel too, and the consent dialog
+            // that a first pause raises.
+            pauseActive = settings.internetPaused || VpnGuard.ownConsentPending(),
+        )
+    }
+
+    /** Every installed home screen, which a VPN lockout must never cover. */
+    private fun resolveLaunchers(): Set<String> = runCatching {
+        val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        val matches = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.queryIntentActivities(
+                home,
+                PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_DEFAULT_ONLY.toLong()),
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.queryIntentActivities(home, PackageManager.MATCH_DEFAULT_ONLY)
+        }
+        matches.map { it.activityInfo.packageName }.toSet()
+    }.getOrDefault(emptySet())
 
     private fun stopMonitoring() {
         loopJob?.cancel()
@@ -799,7 +876,10 @@ class MonitoringService : Service() {
         /** Roughly every ten minutes at the poll interval above. */
         private const val TICKS_BETWEEN_CLONE_SCANS = 300
 
-        /** Applying a pause rebuilds the tunnel; the two briefly disagree while it does. */
+        /** Two ticks, about four seconds; see foreignVpnTicks. */
+        private const val FOREIGN_VPN_CONFIRM_TICKS = 2
+
+        /** Raising the pause tunnel takes a moment; the two briefly disagree while it does. */
         private const val PAUSE_GRACE_MILLIS = 6_000L
         private const val PAUSE_REAPPLY_INTERVAL_MILLIS = 30_000L
 

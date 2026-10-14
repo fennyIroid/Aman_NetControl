@@ -3,7 +3,7 @@ package com.example.childsafetyimpl.platform.accessibility
 /**
  * Where a browser keeps the thing the child is looking for.
  *
- * Forcing SafeSearch through the tunnel handles explicit imagery and nothing else, so a search for
+ * Forcing SafeSearch at the resolver handles explicit imagery and nothing else, so a search for
  * a drug or a way to hurt yourself comes back in full. Reading the search itself is the only thing
  * left that catches those, and this is the map of where to read it from.
  *
@@ -118,7 +118,10 @@ object BrowserSurfaces {
         val withoutScheme = trimmed
             .removePrefix("https://")
             .removePrefix("http://")
-        val host = withoutScheme.substringBefore('/').substringBefore('?').substringBefore(':')
+        // "http://google.com@example.com" opens example.com: what precedes an @ is a user name,
+        // and reading it as the host let any refused site through behind an allowed one.
+        val host = withoutScheme.substringBefore('/').substringBefore('?').substringBefore('#')
+            .substringAfterLast('@').substringBefore(':')
         if (!host.contains('.') || host.startsWith('.') || host.endsWith('.')) return null
         return host.takeIf { candidate -> candidate.all { it.isLetterOrDigit() || it == '.' || it == '-' } }
     }

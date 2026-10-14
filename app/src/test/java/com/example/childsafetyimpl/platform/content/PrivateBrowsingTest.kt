@@ -142,6 +142,39 @@ class PrivateBrowsingTest {
         assertNull(tracker.next(chrome, true, blackedOut = false, now = PrivateTabTracker.EXIT_AFTER_MILLIS))
     }
 
+    /**
+     * Driven on a Galaxy M36: back in Chrome on an ordinary results page after leaving it while
+     * private, one clear frame arrived, the page sat still, and no second frame ever came. A box
+     * stood over the Google logo until the child scrolled.
+     */
+    @Test
+    fun `a still screen after a clear frame ends it without a second frame`() {
+        val tracker = PrivateTabTracker()
+        tracker.adopt(chrome)
+        tracker.next(chrome, true, blackedOut = false, now = 1_000)
+        assertEquals(chrome, tracker.confirmStill(now = 1_000 + PrivateTabTracker.EXIT_AFTER_MILLIS - 1))
+        assertNull(tracker.confirmStill(now = 1_000 + PrivateTabTracker.EXIT_AFTER_MILLIS))
+    }
+
+    @Test
+    fun `a still screen ends nothing when the latest frame was not clear`() {
+        // The frame on screen is the latest one, so only its verdict may stand for a still page.
+        val tracker = privateChrome()
+        tracker.next(chrome, true, blackedOut = false, now = 100)
+        tracker.next(chrome, true, blackedOut = true, now = 200)
+        assertEquals(chrome, tracker.confirmStill(now = 5_000))
+
+        val covered = privateChrome()
+        covered.next(chrome, true, blackedOut = false, now = 100)
+        covered.next(chrome, true, blackedOut = null, now = 200)
+        assertEquals(chrome, covered.confirmStill(now = 5_000))
+    }
+
+    @Test
+    fun `a still black screen stays private`() {
+        assertEquals(chrome, privateChrome().confirmStill(now = 60_000))
+    }
+
     @Test
     fun `a frame too covered to judge keeps the private tab`() {
         val tracker = privateChrome()

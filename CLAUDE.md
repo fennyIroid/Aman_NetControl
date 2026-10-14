@@ -75,17 +75,17 @@ has a route, unique id, and no permission listed as both required and strengthen
 
 | Protection | Mechanism |
 |---|---|
-| VPN restriction | `VpnGuard` + `ChildSafetyVpnService`. Finds VPN apps by querying the VPN service intent, closes them on open, and reclaims the single tunnel Android allows. |
+| VPN restriction | `VpnGuard`, with no VPN of our own. `SafetyAccessibilityService` cancels Android's VPN connection request (`com.android.vpndialogs`) for any app but this one, VPN apps found by querying the VPN service intent are closed on open, and while a foreign tunnel is up `MonitoringService` blocks every app except Settings, the launcher and calling (`VpnLockout`), with a button to the VPN screen. On a Device Owner, `NetworkLockdown` forbids VPN configuration outright. See rule 32. |
 | Dual and cloned app control | `CloneGuard` + `CloneDetector`. Four scans, a `LauncherApps` callback for live detection, findings persisted so history survives. |
 | Shorts and Reels control | `SafetyAccessibilityService` + `SurfaceSignatures` + `SurfaceGuard`. Reads the live view tree, matches a signature, presses back. |
 | Status and Stories control | Same engine, different signatures. |
 | AI chat and game monitoring | `AiActivityMonitor` for time and budgets, `AiPromptRiskScorer` for the conversation surface. |
 | App restriction | `MonitoringService` polls `UsageStatsManager` and shows `BlockOverlayController`'s block screen. |
-| Search and site filtering | `SafeSearchDns` rewrites search-engine lookups in the tunnel to each engine's published filtered address, and `SearchTermGuard` reads the address bar and search fields of other browsers against `BlockedSearchTerms`. Sites are judged by `SafetyRulesRepository.evaluateHost`: the parent's rules, the Room category rules, then the bundled category lists (`BundledHostLists`, ~64k adult hosts held as a `HostSet`) and `AdultHostKeywords`. |
-| Ad removal | `AdBlockList` at three layers: DNS in the tunnel, request interception in the browser and player, CSS to hide the slots. |
+| Search and site filtering | Android's Private DNS pointed at a filtering resolver (`PrivateDnsGuard.resolvers`, default CleanBrowsing Family) refuses harmful sites and forces SafeSearch for every app; there is no tunnel. `PrivateDnsGuard` drives the guided setup and the monitoring loop's alert when the setting changes, and on a Device Owner `NetworkLockdown` sets and locks it. `SearchTermGuard` reads the address bar and search fields of other browsers against `BlockedSearchTerms`. Sites are judged by `SafetyRulesRepository.evaluateHost`: the parent's rules, the Room category rules, then the bundled category lists (`BundledHostLists`, ~64k adult hosts held as a `HostSet`) and `AdultHostKeywords` — in other browsers' address bars and in the built-in browser, because a public resolver cannot hold one family's lists. Between the parent's rules and the categories, `evaluateHost` also refuses a public address opened directly (`DirectAddress`, including integer/hex/`user@` disguises and nip.io-style names; private ranges never) and a relay carrying a refused site (`ProxyOrigin`: translate.goog, the AMP cache, the Wayback Machine). See rule 34. |
+| Ad removal | `AdBlockList` in the built-in browser and player: request interception and CSS to hide the slots. In other apps it is the resolver's: AdGuard Family refuses common ad and tracker hosts, CleanBrowsing and Cloudflare do not (measured, `docs/sprint0/Website-Blocking-Coverage.md`). |
 | Browser image blurring | `SafeBrowserEngine` + `ImageSafetyClassifier` + `ImageBlur`. Images are fetched, scored and blurred before the page receives them. |
 | Video blurring | `ScreenAnalysisService` samples frames through `MediaProjection`. `ScreenRegions` finds the picture-shaped parts of the frame, `FrameScanner` classifies each one separately, `CoverPolicy` decides which covers stay up, `VerdictStability` keeps one picture's verdict steady across the frames it appears in, `RowProfile` measures how far the page moved so the covers move with it — or, where the app in front reports its own scroll through the accessibility service, `ScrollLedger` says exactly how far — `SceneSignature` decides whether it is still the same screen at all, with the accessibility service's foreground-window signal as the authority when it is granted, and `BlockOverlayController` gives each covered picture its own window — added through the accessibility service so it can be opaque and still let touches through — holding a blurred copy of it (`ImageBlur.blurPreview`) and nothing else. Covering the individual failing pictures is the default; whole-screen and cover-people are the other two modes. A browser's private tab cannot be captured at all, so it is handed to `PrivateTabGuard` (rule 31). |
-| Internet pause | `InternetPauseController` switches `ChildSafetyVpnService` into `TunnelMode.PAUSED`: a default route with nothing forwarded. Persisted before it is applied, restored on boot, and read back by the tunnel on every start (`TunnelMode.restingFor`). `MonitoringService` re-applies a pause the tunnel lost, shows the child a paused notice over network-dependent apps, and alerts the parent when the pause cannot be put back. One tap from the dashboard and from Controls. |
+| Internet pause | The one thing a VPN is still raised for. `InternetPauseController` starts `PauseTunnelService`: IPv4 and IPv6 default routes with nothing forwarded and this app not exempt, up only while paused. Persisted before it is applied, restored on boot, and read back by the service on every start (rule 30). `MonitoringService` re-applies a pause the tunnel lost, shows the child a paused notice over network-dependent apps, and alerts the parent when the pause cannot be put back. One tap from the dashboard and from Controls. |
 
 ## Sprint 0 additions
 
@@ -96,25 +96,26 @@ follows is where to look.
   the limits stated on a protection screen and the limits validated in the POC report come from one
   source. `BypassCatalogTest` enforces that nothing is classified as prevented without a mechanism,
   and that no tampering scenario is ever claimed as prevented.
-- **`platform/network/FilteringMode.kt`** — Private DNS vs tunnel vs hybrid, with a capability
-  matrix. Added because the client asked why a DNS-based product felt lighter than a VpnService one;
-  the answer is that the two products do different jobs, and only the tunnel can pause the internet.
-  The parent chooses the posture on Controls (`SafetySettings.filteringMode`, default tunnel so an
-  update changes nobody's filtering). In the Private DNS postures the tunnel runs only for a pause,
-  or as an empty `TunnelMode.HOLD` for fifteen seconds to end another VPN, because a filtering
-  tunnel would refuse the resolver Private DNS points at. `PrivateDnsGuard` drives the guided setup
-  and the monitoring loop's alert when the setting is cleared or pointed elsewhere.
+- **DNS-only filtering** (branch `DNSFiltering`) — filtering is Android's Private DNS and nothing
+  else; the filtering tunnel, the posture choice (`FilteringMode`), `SafeSearchDns`,
+  `EncryptedDnsPolicy` and `TunnelExclusions` were removed. The client asked why a DNS-based product
+  felt lighter than a VpnService one: no VPN key, nothing for a banking app to object to. What that
+  costs is stated where it applies: the parent's own lists outside browsers, an address opened by
+  an app other than a browser, and a browser's DoH to a resolver given by address are out of reach
+  of a resolver; device-wide ad removal depends on which resolver is chosen. The pause is the one
+  exception, because a resolver cannot stop a connection (`PauseTunnelService`). The client's
+  review of this branch (no VpnService, DNS like KAHF Guard, broad and Arabic coverage, IP and
+  other bypasses) is answered in `docs/sprint0/Website-Blocking-Coverage.md`, with the
+  measurements and the scripts that took them in `docs/sprint0/coverage-measurement/`.
 - **`platform/network/SystemTrafficExemptions.kt`** — the hosts a phone needs to keep working
   (connectivity checks, push, Play updates, sign-in, time), kept reachable in allow-list-only mode.
   Consulted after the parent's rules, so it never outranks a block. Never add a browsable host or a
   general-purpose CDN; a test enforces the ones that matter most.
-- **`platform/network/EncryptedDnsPolicy.kt`** — DoH and DoT defences at two layers. Refusing
-  resolver hostnames is defeated by configuring a resolver by IP, so the tunnel also takes a host
-  route per known resolver address and drops what is sent there.
-- **`platform/network/TunnelExclusions.kt`** — banking and identity apps kept outside the tunnel.
-  Not a filtering decision: many of them refuse to run when they can see `TRANSPORT_VPN`, and a
-  parent whose bank stops working uninstalls the product. Never extend this list to browsers or
-  social apps; a test enforces it.
+- **`platform/admin/NetworkLockdown.kt`** — what a Device Owner adds: Private DNS set to the
+  parent's resolver and locked (`DISALLOW_CONFIG_PRIVATE_DNS`), and VPN configuration forbidden
+  (`DISALLOW_CONFIG_VPN`), applied from the monitoring loop and a no-op on every other device. The
+  VPN restriction would refuse the pause tunnel too, so it is lifted while a pause or this app's own
+  consent dialog is in progress.
 - **`core/protection/ProtectionHealth.kt`** — the four-state health model. `DISABLED` and `TAMPERED`
   are deliberately not merged: one is a parent's decision and the other is a child's. Rendered on
   the dashboard by `GetDashboardUiStateUseCase`, which feeds it from `MonitoringService.State`.
@@ -163,13 +164,14 @@ that lies to a parent.
    "what to expect" section naming what it cannot do.
 5. **A window-manager overlay is not an Activity.** `ChildSafetyTheme` must never assume its context
    is one; the block screen, the surface notice and the blur layer all run outside an Activity.
-6. **Never read DataStore inside a hot callback.** Request interception and the DNS pump cache their
-   settings and observe changes; a preference read per subresource is a disk read per image.
-7. **One socket per DNS lookup, never one for the tunnel.** Answers arrive in whatever order the
-   network delivers them, so a shared socket can return query A's answer to query B. The asking
-   app drops the mismatched transaction and waits for an answer already spent, which is a page
-   that never loads. `ChildSafetyVpnService.forward` opens its own socket per query and the writes
-   back into the tunnel are serialised behind a mutex.
+6. **Never read DataStore inside a hot callback.** Request interception and the pause tunnel's
+   packet loop cache their settings and observe changes; a preference read per subresource is a
+   disk read per image.
+7. **Writes back into a tunnel are serialised.** Refusals are written from coroutines, and two
+   interleaved writes to the descriptor produce a packet that is neither of them;
+   `PauseTunnelService.writeToTunnel` holds a mutex. If lookups are ever forwarded again, use one
+   socket per lookup: a shared socket can return query A's answer to query B, and the asking app
+   drops it and waits for an answer already spent.
 8. **Only read a text field, never the body of a page.** `SearchTermGuard` is handed the address
    bar, editable fields and search-result titles. Matching a restricted word anywhere on screen
    would close a news article, and a protection that does that gets switched off.
@@ -374,15 +376,14 @@ that lies to a parent.
     something else cancels them. The cost is stated: a swimsuit photograph the labeller does not
     call "Swimwear" is no longer covered on bare skin alone.
 
-30. **The tunnel's posture comes from what the parent asked for, never from memory.** The tunnel held
-    its mode in a field that starts as filtering in every new process, so a service Android
-    restarted after killing it — or one reclaiming the slot from another VPN — came back filtering
-    while the parent's pause was still saved as on. The internet quietly returned and the screen
-    still said paused. `ChildSafetyVpnService.onStartCommand` reads the saved pause and filtering
-    posture on every start and settles into `TunnelMode.restingFor`, and the monitoring loop puts a
-    pause back when no restart happens at all. A start the posture has no tunnel for calls
-    `startForeground` before standing down, because a foreground-service start that never does is
-    a crash.
+30. **The tunnel's posture comes from what the parent asked for, never from memory.** The tunnel
+    once held its mode in a field that started as filtering in every new process, so a service
+    Android restarted after killing it came back filtering while the parent's pause was still saved
+    as on. The internet quietly returned and the screen still said paused.
+    `PauseTunnelService.onStartCommand` reads the saved pause on every start and either holds the
+    pause or stands down, and the monitoring loop puts a pause back when no restart happens at all.
+    A start with no pause saved calls `startForeground` before standing down, because a
+    foreground-service start that never does is a crash.
 
 31. **A picture nobody could look at is never shown.** A browser's private or incognito tab marks
     its window FLAG_SECURE, and Android blacks it out of every capture — MediaProjection and the
@@ -406,13 +407,65 @@ that lies to a parent.
     when the capture next looks (measured 50-60 ms instead of 0.6-1.5 s). The active window is read
     again 250 ms after a window change, because the event can arrive while the old window is still
     active. The capture loop stands down while a private tab holds the screen. Only the browser's
-    package and a count reach the event log (rule 3).
+    package and a count reach the event log (rule 3). A still screen sends no second frame (rule
+    28), so a tab left for a normal one used to keep its covers until something moved — measured
+    on a Galaxy M36 as a box over the Google logo on an ordinary results page.
+    `PrivateTabTracker.confirmStill` ends it when the latest frame was clear and nothing has
+    arrived for the exit window, because that frame is then what is on screen. A black frame is
+    also not proof: Chrome paints one on some navigations, a single one put the whole-page cover
+    over an ordinary tab on a Galaxy M36, and that cover then hid the page from every frame that
+    could have ended it. From Android 14 the decision is Android's — a screenshot of the active
+    window fails with `ERROR_TAKE_SCREENSHOT_SECURE_WINDOW` only for a secure one
+    (`SafetyAccessibilityService.isActiveWindowSecure`, read for the refusal and closed unread) —
+    asked before a new tab is covered and again each second while one is
+    (`ScreenAnalysisService.verifyPrivateTab`). Frames alone decide only where Android cannot say.
+
+32. **Without a tunnel of its own, the VPN restriction refuses, closes and locks — and never
+    locks the way out.** This app holds no VPN slot, so it cannot end another VPN by taking it
+    back. A connection request is cancelled as it appears (`SafetyAccessibilityService.onVpnDialog`),
+    except this app's own, which needs both a request raised through `VpnGuard.ownConsentIntent`
+    in the last 90 seconds and the dialog naming this app; every place that raises the dialog must
+    go through that function or the guard cancels the pause's consent. Only the consent dialog is
+    cancelled: the manage and always-on dialogs in the same package are how a VPN is switched
+    off. A VPN that connects anyway locks every app except those in `VpnLockout` — Settings, where
+    it is switched off; the launcher, so closing the block screen goes somewhere; and calling and
+    emergency, which a parental control must never block. While a VPN is up the VPN settings
+    surface guard stands down, because closing the exit would trap the child. The lockout waits for
+    two ticks so the pause tunnel's own interface lingering does not lock the phone for a moment
+    every time a pause ends.
+
+33. **Pixels alone never cover.** With no label from the model, a verdict is a skin-tone count,
+    and that is what a peach wallpaper, a sepia illustration or a warm gradient scores high on —
+    driven on a Galaxy M36, the home screen was covered at 0.49. `ImageSafetyClassifier.fuse` caps
+    the no-label branch at `PIXEL_ONLY_CEILING`, under every `ProtectionLevel`, so it can be logged
+    as borderline and never covers. Nudity still reaches a cover through the body labels the
+    labeller does have, with pixels as corroboration.
+
+34. **A resolver sees names; whatever reaches a site without one is checked on the device.** A
+    public address in a browser is refused outright rather than looked up in a list of bad
+    addresses, because nobody browses by address and no such list can be kept — `DirectAddress`
+    reads the forms a browser accepts (integer, hex, octal, `user@`, IPv6, nip.io-style names) and
+    leaves private ranges alone, so a router page always opens. Integer and hex forms count only
+    with a scheme, or "3.5" in a search box closes the browser. A relay that writes the original
+    site into its own address is judged as that site (`ProxyOrigin`), and refused only when the
+    site would be, so translating an ordinary page keeps working. Both sit after the parent's
+    rules in `evaluateHost`, so a parent can allow an address by hand.
+35. **What a resolver covers is measured, never quoted.** Two claims in this codebase were taken
+    on trust and were wrong: that no public resolver refuses ad hosts (AdGuard Family does), and
+    that Cloudflare does not force SafeSearch (it does on Google and Bing, not YouTube). Worse,
+    `dns.adguard.com` was treated as filtering when it refuses ads only, so a parent using it saw
+    filtering confirmed with none in place. A `PrivateDnsResolver`'s `covers`, `forcesSafeSearch`
+    and `restrictsYouTube`, and the filtering-resolver list, change only alongside a run of
+    `docs/sprint0/coverage-measurement/`. Coverage is measured against popular sites whose own
+    names are adult, not against a category list, because the resolvers ingest those lists and
+    the result is circular — measured against UT1, two of them scored 99%; against names, 89-93%.
 
 ## Testing
 
 Unit tests cover the pure logic: the protection catalog invariants, the allowance arithmetic, the ad
 blocklist (including the hosts that must *not* be refused, so YouTube still plays), the AI prompt
-scorer's thresholds, host filtering, DNS and IPv4 parsing, and the image classifier's fusion rule.
+scorer's thresholds, host filtering, DNS and IPv4 parsing, the filtering resolvers, what a VPN
+lockout leaves usable, and the image classifier's fusion rule.
 
 Anything needing a device is verified by running it. `./gradlew installDebug`, then grant access
 from the Permissions screen.

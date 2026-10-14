@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ChatBubbleOutline
+import androidx.compose.material.icons.rounded.VpnKey
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,6 +51,8 @@ fun BlockOverlayContent(
     decision: BlockDecision,
     onAskParent: () -> Unit,
     onClose: () -> Unit,
+    /** The way out when a VPN is the reason, which only Settings can offer. */
+    onOpenVpnSettings: () -> Unit = {},
 ) {
     ChildSafetyTheme {
         var visible by remember { mutableStateOf(false) }
@@ -101,10 +104,12 @@ fun BlockOverlayContent(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(11.dp),
                 ) {
+                    // When a VPN is the reason, the useful thing to offer is the way to end it.
+                    val vpnActive = decision.reason == BlockReason.VpnActive
                     PrimaryButton(
-                        text = "Ask a parent",
-                        onClick = onAskParent,
-                        icon = Icons.Rounded.ChatBubbleOutline,
+                        text = if (vpnActive) "Turn off the VPN" else "Ask a parent",
+                        onClick = if (vpnActive) onOpenVpnSettings else onAskParent,
+                        icon = if (vpnActive) Icons.Rounded.VpnKey else Icons.Rounded.ChatBubbleOutline,
                         modifier = Modifier.fillMaxWidth(),
                         brush = androidx.compose.ui.graphics.SolidColor(
                             androidx.compose.ui.graphics.Color(0x33FFFFFF),
@@ -135,6 +140,7 @@ private fun headlineFor(decision: BlockDecision): String = when (decision.reason
     is BlockReason.BedtimeWindow -> "It's wind-down time"
     BlockReason.AlwaysBlocked -> "${decision.appLabel} is switched off"
     BlockReason.VpnApp -> "VPN apps are switched off"
+    BlockReason.VpnActive -> "A VPN is turned on"
     BlockReason.CloneApp -> "App copying is switched off"
     is BlockReason.RoutineRestriction -> "It's ${decision.reason.let { (it as BlockReason.RoutineRestriction).routineName }} time"
     BlockReason.InternetPaused -> "The internet is paused"
@@ -160,6 +166,10 @@ private fun explanationFor(decision: BlockDecision): String = when (val reason =
 
     BlockReason.VpnApp ->
         "This device keeps its own safe connection, so VPN apps stay closed."
+
+    BlockReason.VpnActive ->
+        "Apps stay closed while a VPN is on. Turn it off in Settings and everything comes " +
+            "straight back."
 
     BlockReason.CloneApp ->
         "Making a second copy of an app gets around the settings a parent chose."

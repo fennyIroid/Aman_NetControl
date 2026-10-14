@@ -39,8 +39,6 @@ data class DashboardUiState(
     val internetPaused: Boolean = false,
     /** Whether the pause is in force; the gap between the two is a health issue. */
     val internetPauseEnforced: Boolean = false,
-    /** False in the Private DNS-only posture, which has nothing in the traffic path to stop. */
-    val pauseAvailable: Boolean = true,
     /** Set when a pause could not be applied, so the card can say why. */
     val pauseMessage: String? = null,
 ) {

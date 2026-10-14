@@ -12,10 +12,14 @@ import com.example.childsafetyimpl.domain.model.RestrictedSurface
 import com.example.childsafetyimpl.platform.ai.AiActivityMonitor
 import com.example.childsafetyimpl.platform.enforcement.BlockOverlayController
 import com.example.childsafetyimpl.platform.enforcement.SurfaceBlockDecision
+import com.example.childsafetyimpl.platform.network.VpnGuard
 import com.example.childsafetyimpl.platform.usage.AppInventoryProvider
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 import javax.inject.Inject
 
 /**
@@ -33,6 +37,8 @@ import javax.inject.Inject
  *     child's behalf and shows the reason.
  *  3. On an AI conversation, hands the prompt text to [AiActivityMonitor], which scores it in
  *     memory and keeps only a verdict.
+ *  4. When Android's VPN connection request appears for any app but this one, presses Cancel, so
+ *     a VPN never gets the permission it needs to start. See [VpnGuard].
  *
  * The service never persists what it reads. Screen text is scored and dropped inside the call
  * stack it arrived on; what survives is a surface name, a duration and a risk verdict.
@@ -52,6 +58,7 @@ class SafetyAccessibilityService : AccessibilityService() {
     @Inject lateinit var inventory: AppInventoryProvider
     @Inject lateinit var overlayController: BlockOverlayController
     @Inject lateinit var privateTabGuard: PrivateTabGuard
+    @Inject lateinit var vpnGuard: VpnGuard
 
     @Inject @ApplicationScope lateinit var scope: CoroutineScope
 
@@ -109,6 +116,13 @@ class SafetyAccessibilityService : AccessibilityService() {
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
             -> Unit
             else -> return
+        }
+
+        // Before the throttle: the dialog has to be cancelled before a child can press OK.
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            packageName == VPN_DIALOGS_PACKAGE
+        ) {
+            onVpnDialog(event.className?.toString())
         }
 
         // Published before the throttle and before any tree walk, because it costs nothing and
@@ -199,6 +213,54 @@ class SafetyAccessibilityService : AccessibilityService() {
                 is SurfaceGuard.Verdict.Close -> enforce(verdict, packageName, appLabel)
             }
         }
+    }
+
+    /**
+     * Android's VPN dialog package put a window up.
+     *
+     * Three windows live in that package, and only one is a request to start a VPN. The other two
+     * are how a VPN is switched off — the manage dialog, and the notice that an always-on VPN
+     * dropped — and cancelling those would keep the VPN the lockout is asking the child to end.
+     *
+     * The dialog's text is read only to see whether it names this app, which is the one request
+     * that must go through: the internet pause needs it. Nothing else about it is kept.
+     */
+    private fun onVpnDialog(className: String?) {
+        if (className != null &&
+            VPN_DIALOGS_LEAVE_OPEN.any { className.contains(it, ignoreCase = true) }
+        ) {
+            return
+        }
+        val ownLabel = runCatching { applicationInfo.loadLabel(packageManager).toString() }
+            .getOrDefault("")
+        val namesThisApp = ownLabel.isNotBlank() && runCatching {
+            rootInActiveWindow?.findAccessibilityNodeInfosByText(ownLabel)?.isNotEmpty() == true
+        }.getOrDefault(false)
+
+        scope.launch {
+            if (!vpnGuard.shouldRefuseConsent(namesThisApp)) return@launch
+            mainHandler.post {
+                val refused = cancelVpnDialog()
+                scope.launch { vpnGuard.onConsentRefused(refused) }
+            }
+        }
+    }
+
+    /**
+     * Presses Cancel on the connection request, falling back to back, which dismisses it the
+     * same way. Cancel first because back can be consumed by a dialog that is still animating in.
+     */
+    private fun cancelVpnDialog(): Boolean {
+        val root = runCatching { rootInActiveWindow }.getOrNull()
+        val cancel = root
+            ?.takeIf { it.packageName?.toString() == VPN_DIALOGS_PACKAGE }
+            ?.let { runCatching { it.findAccessibilityNodeInfosByViewId(CANCEL_BUTTON_ID) }.getOrNull() }
+            ?.firstOrNull { it.isEnabled }
+        val clicked = cancel?.let {
+            runCatching { it.performAction(AccessibilityNodeInfo.ACTION_CLICK) }.getOrDefault(false)
+        } == true
+        if (clicked) return true
+        return runCatching { performGlobalAction(GLOBAL_ACTION_BACK) }.getOrDefault(false)
     }
 
     /**
@@ -454,7 +516,67 @@ class SafetyAccessibilityService : AccessibilityService() {
         /** Whether the trusted route is available, for anything that has to say so on screen. */
         fun isConnected(): Boolean = connected != null
 
+        /**
+         * Whether the active window, owned by [packageName], is FLAG_SECURE — asked of Android
+         * rather than inferred from a black frame.
+         *
+         * A browser paints black for a moment on some navigations and tab switches, and one such
+         * frame read as a private tab put the whole-page cover over an ordinary page; the cover
+         * then hid the page from every later frame, so nothing could take it down. Driven on a
+         * Galaxy M36, Chrome's window had no SECURE flag the whole time. From Android 14 a
+         * screenshot of one window fails with ERROR_TAKE_SCREENSHOT_SECURE_WINDOW exactly when
+         * that window is secure, which is the question being asked. A screenshot that succeeds
+         * is closed unread: the answer is whether Android refused, never what the page shows
+         * (rule 3).
+         *
+         * Null when Android cannot say — older than 14, service off, another window active, any
+         * other error — and the caller then keeps deciding from frames as before.
+         */
+        suspend fun isActiveWindowSecure(packageName: String): Boolean? {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return null
+            val service = connected ?: return null
+            val windowId = runCatching {
+                service.rootInActiveWindow?.takeIf { it.packageName == packageName }?.windowId
+            }.getOrNull() ?: return null
+            return withTimeoutOrNull(SECURE_PROBE_TIMEOUT_MILLIS) {
+                suspendCancellableCoroutine { continuation ->
+                    val sent = runCatching {
+                        service.takeScreenshotOfWindow(
+                            windowId,
+                            Runnable::run,
+                            object : TakeScreenshotCallback {
+                                override fun onSuccess(screenshot: ScreenshotResult) {
+                                    runCatching { screenshot.hardwareBuffer.close() }
+                                    if (continuation.isActive) continuation.resume(false)
+                                }
+
+                                override fun onFailure(errorCode: Int) {
+                                    val secure = when (errorCode) {
+                                        ERROR_TAKE_SCREENSHOT_SECURE_WINDOW -> true
+                                        else -> null
+                                    }
+                                    if (continuation.isActive) continuation.resume(secure)
+                                }
+                            },
+                        )
+                    }
+                    if (sent.isFailure && continuation.isActive) continuation.resume(null)
+                }
+            }
+        }
+
+        private const val SECURE_PROBE_TIMEOUT_MILLIS = 500L
+
         private const val THROTTLE_MILLIS = 700L
+
+        /** Where Android's VPN consent, manage and always-on dialogs live. */
+        private const val VPN_DIALOGS_PACKAGE = "com.android.vpndialogs"
+
+        /** The dialogs in that package that switch a VPN off, which must never be cancelled. */
+        private val VPN_DIALOGS_LEAVE_OPEN = listOf("ManageDialog", "AlwaysOn")
+
+        /** The negative button of a platform alert dialog, which is Cancel on the consent dialog. */
+        private const val CANCEL_BUTTON_ID = "android:id/button2"
 
         /** How long after a window change the active window is read again; see noteActiveApp. */
         private const val ACTIVE_APP_RECHECK_MILLIS = 250L

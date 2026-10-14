@@ -11,6 +11,7 @@ Prepared by iRoid Solutions. Covers the Android engineering portion of the Sprin
 | 4 | Android vs iOS Scope Notes | [Android-vs-iOS-Scope-Notes.md](Android-vs-iOS-Scope-Notes.md) | Complete |
 | 5 | Store Policy / Entitlement Readiness | [Store-Policy-and-Entitlement-Readiness.md](Store-Policy-and-Entitlement-Readiness.md) | Complete |
 | — | Filtering architecture: DNS vs VpnService | [Architecture-DNS-vs-VPN.md](Architecture-DNS-vs-VPN.md) | Complete — added at client request |
+| — | **Harmful website blocking: response to the PO review** | [Website-Blocking-Coverage.md](Website-Blocking-Coverage.md) | Complete — measured resolver coverage, incl. Arabic; IP and relay bypasses closed |
 | — | **Device test protocol** | [TEST-PROTOCOL.md](TEST-PROTOCOL.md) | Ready to run — fills the empty tables in 3a and 3b |
 | — | **Test scenarios and fixtures** | [TEST-SCENARIOS.md](TEST-SCENARIOS.md) | What to point the protocol at |
 

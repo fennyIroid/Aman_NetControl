@@ -65,12 +65,6 @@ data class ProtectionHealth(
              * devices before Android 16 that cannot have it, need not say anything.
              */
             advancedProtectionOn: Boolean = false,
-            /**
-             * Web filtering is delivered through Private DNS, so the setting being unset or
-             * pointed elsewhere is the filter missing rather than a way around the tunnel.
-             * Changes what the Private DNS issue tells the parent to do, not whether it is raised.
-             */
-            privateDnsIsTheFilter: Boolean = false,
         ): ProtectionHealth {
             val issues = mutableListOf<Issue>()
 
@@ -128,15 +122,17 @@ data class ProtectionHealth(
                     kind = IssueKind.FOREIGN_VPN,
                     title = "Another VPN is running",
                     why = "Traffic is leaving through an app this product does not control, so " +
-                        "website blocking, Safe Search and ad filtering do not apply to it.",
-                    resolution = "Remove the VPN app, or switch on VPN restriction so it is " +
-                        "closed when it is opened.",
+                        "the Private DNS filter and Safe Search do not apply to it.",
+                    resolution = "Switch it off in Settings, Network and internet, VPN, and " +
+                        "remove the app. With VPN restriction on, the phone stays blocked " +
+                        "until it is off.",
                 )
             }
 
-            if (privateDnsBypassing && privateDnsIsTheFilter) {
-                // Two different sentences: the setting cleared, or the setting pointed at a
-                // resolver that does not filter. Both leave the device unfiltered.
+            if (privateDnsBypassing) {
+                // Private DNS is the filter. Two different sentences: the setting cleared, or the
+                // setting pointed at a resolver that does not filter. Both leave the device
+                // unfiltered, and neither is fixed by "set it to Automatic", which is no filter.
                 issues += Issue(
                     kind = IssueKind.PRIVATE_DNS_BYPASS,
                     title = if (privateDnsHost == null) "Private DNS is not set"
@@ -149,18 +145,8 @@ data class ProtectionHealth(
                                 "blocking and Safe Search do not apply."
                             ),
                     resolution = "Controls, Web filtering: follow the Private DNS steps and " +
-                        "enter the hostname shown there. Android does not let any app change " +
-                        "this setting for you.",
-                )
-            } else if (privateDnsBypassing) {
-                issues += Issue(
-                    kind = IssueKind.PRIVATE_DNS_BYPASS,
-                    title = "Private DNS is sending lookups elsewhere",
-                    why = "Every name lookup on this device goes to " +
-                        (privateDnsHost ?: "another provider") + " in an encrypted session that " +
-                        "this app cannot read. Website blocking and Safe Search cannot apply.",
-                    resolution = "Settings, Network and internet, Private DNS, set to Automatic. " +
-                        "Android does not let any app change this setting for you.",
+                        "enter the hostname shown there. Android does not let an app change " +
+                        "this setting for you unless the device is managed.",
                 )
             }
 
@@ -171,8 +157,9 @@ data class ProtectionHealth(
                 issues += Issue(
                     kind = IssueKind.PAUSE_NOT_ENFORCED,
                     title = "The internet is not actually paused",
-                    why = "You paused the internet, but the filtering tunnel is not running, so " +
-                        "this device is online. VPN permission was most likely withdrawn.",
+                    why = "You paused the internet, but the pause is not running, so this " +
+                        "device is online. The connection permission was most likely withdrawn, " +
+                        "or another VPN is set as always-on.",
                     resolution = "Open the app and allow the connection request again.",
                 )
             }

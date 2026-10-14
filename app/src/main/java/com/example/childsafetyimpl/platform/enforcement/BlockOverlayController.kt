@@ -166,6 +166,11 @@ class BlockOverlayController @Inject constructor(
                 onDismiss()
                 openPermissions()
             }
+            val vpnSettings = {
+                hide()
+                onDismiss()
+                openVpnSettings()
+            }
             val composeView = ComposeView(context).apply {
                 attachTo(host)
                 setContent {
@@ -173,6 +178,7 @@ class BlockOverlayController @Inject constructor(
                         decision = decision,
                         onAskParent = askParent,
                         onClose = dismiss,
+                        onOpenVpnSettings = vpnSettings,
                     )
                 }
 
@@ -242,6 +248,26 @@ class BlockOverlayController @Inject constructor(
         runCatching {
             context.startActivity(MainActivity.intent(context, Routes.permissions()))
         }.onFailure { leaveBlockedApp() }
+    }
+
+    /**
+     * Opens Android's VPN screen, which is where any VPN — an app's or one set up by hand — is
+     * switched off. Settings stays usable while a VPN is up (see `VpnLockout`), and the surface
+     * guard leaves the VPN screen open for exactly as long as one is connected.
+     */
+    private fun openVpnSettings() {
+        val opened = runCatching {
+            context.startActivity(
+                Intent(Settings.ACTION_VPN_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }.isSuccess
+        if (!opened) {
+            runCatching {
+                context.startActivity(
+                    Intent(Settings.ACTION_WIRELESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }.onFailure { leaveBlockedApp() }
+        }
     }
 
     fun hide() = onMain {

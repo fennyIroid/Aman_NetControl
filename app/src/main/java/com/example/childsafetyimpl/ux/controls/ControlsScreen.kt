@@ -23,7 +23,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Apps
-import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Dns
@@ -57,8 +56,7 @@ import com.example.childsafetyimpl.domain.model.AppCategory
 import com.example.childsafetyimpl.domain.model.WebCategory
 import com.example.childsafetyimpl.navigation.HandleNavigation
 import com.example.childsafetyimpl.navigation.LocalNavController
-import com.example.childsafetyimpl.platform.network.FilteringMode
-import com.example.childsafetyimpl.platform.network.NetworkCapability
+import com.example.childsafetyimpl.platform.accessibility.SurfaceGuard
 import com.example.childsafetyimpl.platform.network.PrivateDnsGuard
 import com.example.childsafetyimpl.ui.components.FilterPill
 import com.example.childsafetyimpl.ui.components.HeroHeader
@@ -83,12 +81,6 @@ fun ControlsScreen(viewModel: ControlsViewModel) {
     HandleNavigation(viewModel, LocalNavController.current)
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val settings = state.settings
-
-    val vpnConsentLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult(),
-    ) { result ->
-        if (result.resultCode != 0) viewModel.setTunnel(true)
-    }
 
     // Consent asked for by the pause button itself, so pausing is still one tap from the
     // parent's side the first time: allow, and the pause they asked for goes through.
@@ -373,8 +365,8 @@ fun ControlsScreen(viewModel: ControlsViewModel) {
                             // branch exists at all.
                             state.internetPaused ->
                                 "You paused the internet, but it is not being applied: the " +
-                                    "filtering tunnel is not running, so this device is online. " +
-                                    "Connection permission was most likely withdrawn."
+                                    "pause is not running, so this device is online. Connection " +
+                                    "permission was most likely withdrawn."
 
                             else ->
                                 "Stops all internet on this device at once, on Wi-Fi and mobile " +
@@ -405,88 +397,34 @@ fun ControlsScreen(viewModel: ControlsViewModel) {
                             onClick = onTogglePause,
                             modifier = Modifier.fillMaxWidth(),
                         )
-                    } else if (state.filteringMode.canPauseInternet) {
+                    } else {
                         SecondaryButton(
                             text = "Pause the internet",
                             onClick = onTogglePause,
                             contentColor = SafetyPalette.Danger,
                             modifier = Modifier.fillMaxWidth(),
                         )
-                    } else {
-                        // Said here rather than left as a button that fails: the posture the
-                        // parent chose has nothing in the traffic path to stop.
-                        Text(
-                            text = "Private DNS on its own cannot pause the internet, because a " +
-                                "resolver cannot stop a connection that is already open. Choose " +
-                                "Hybrid or Tunnel below to use pause.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = SafetyPalette.Warning,
-                        )
                     }
+                    Spacer(Modifier.height(10.dp))
+                    // What to expect (rule 4). The one place this product still raises a VPN,
+                    // and the parent should know that before a banking app tells them.
+                    Text(
+                        text = "A resolver cannot stop a connection, so a pause holds the " +
+                            "device's VPN slot for as long as it lasts, and lets it go when you " +
+                            "resume. While paused, a VPN key shows in the status bar and banking " +
+                            "apps can see it. The first pause asks for the connection permission.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SafetyPalette.Slate,
+                    )
                 }
 
-                FilteringModeSection(
+                WebFilteringSection(
                     state = state,
-                    onSelectMode = { viewModel.onEvent(ControlsUiEvent.SetFilteringMode(it)) },
                     onSelectResolver = {
                         viewModel.onEvent(ControlsUiEvent.SetPrivateDnsHostname(it))
                     },
                     onRefresh = { viewModel.onEvent(ControlsUiEvent.RefreshPrivateDns) },
                 )
-
-                ProtectionSection(title = "Device-wide filtering", icon = Icons.Rounded.Shield) {
-                    if (!state.filteringMode.keepsTunnelUp) {
-                        // In the Private DNS postures the tunnel is not something a parent keeps
-                        // running, so the start button would contradict the choice just made.
-                        Text(
-                            text = if (state.tunnelRunning) {
-                                "The tunnel is up for now — for a pause, or briefly to end " +
-                                    "another VPN — and goes away again afterwards."
-                            } else {
-                                "Filtering runs through Private DNS, so the tunnel is not kept " +
-                                    "running. It is raised only while it is needed" +
-                                    (if (state.filteringMode.canPauseInternet) ", such as for " +
-                                        "a pause." else ".")
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = SafetyPalette.Slate,
-                        )
-                        return@ProtectionSection
-                    }
-                    Text(
-                        text = if (state.tunnelRunning) {
-                            "The tunnel is running. Blocked sites and ad hosts are refused for " +
-                                "every app on this device, not only the built-in browser."
-                        } else {
-                            "Without the tunnel, filtering only applies inside the built-in " +
-                                "browser and player. Other apps are unaffected."
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = SafetyPalette.Slate,
-                    )
-                    Spacer(Modifier.height(14.dp))
-                    if (state.tunnelRunning) {
-                        SecondaryButton(
-                            text = "Stop the tunnel",
-                            onClick = { viewModel.onEvent(ControlsUiEvent.SetTunnel(false)) },
-                            contentColor = SafetyPalette.Danger,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    } else {
-                        PrimaryButton(
-                            text = "Start the tunnel",
-                            onClick = {
-                                val consent = viewModel.tunnelConsentIntent()
-                                if (consent != null) {
-                                    vpnConsentLauncher.launch(consent)
-                                } else {
-                                    viewModel.setTunnel(true)
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                }
 
                 ProtectionSection(title = "Message signals", icon = Icons.Rounded.Tune) {
                     SettingSwitchRow(
@@ -575,91 +513,35 @@ private val BUDGET_CATEGORIES = listOf(
     AppCategory.AI,
 )
 
-private fun FilteringMode.shortLabel(): String = when (this) {
-    FilteringMode.VPN_TUNNEL -> "Tunnel"
-    FilteringMode.PRIVATE_DNS -> "Private DNS"
-    FilteringMode.HYBRID -> "Hybrid"
-}
-
 /**
- * How device-wide filtering is delivered, and the setup the Private DNS postures need.
+ * How the web is filtered: Android's Private DNS, pointed at a filtering resolver.
  *
- * The capability list under the choice is generated from [FilteringMode.capabilities], the same
- * data the architecture note's comparison table is built from, so what this screen promises and
- * what the Sprint 0 results claim cannot drift apart.
+ * There is one mechanism and no tunnel to start. What a parent chooses is the
+ * resolver, and what they do is the Private DNS step below, unless the device is managed and the
+ * app has done it for them.
  */
 @Composable
-private fun FilteringModeSection(
+private fun WebFilteringSection(
     state: ControlsUiState,
-    onSelectMode: (FilteringMode) -> Unit,
     onSelectResolver: (String) -> Unit,
     onRefresh: () -> Unit,
 ) {
-    val mode = state.filteringMode
     ProtectionSection(title = "How filtering works", icon = Icons.Rounded.Router) {
         Text(
-            text = "The tunnel filters inside this app and can pause the internet, but shows a " +
-                "VPN key and is visible to banking apps. Private DNS is quieter and invisible to " +
-                "them, but cannot pause. Hybrid uses Private DNS day to day and raises the " +
-                "tunnel only for a pause.",
+            text = "Every name lookup on this device, in every app and on Wi-Fi and mobile data, " +
+                "goes to a filtering resolver through Android's Private DNS. There is no VPN, " +
+                "no key in the status bar, and nothing for a banking app to object to. Your own " +
+                "blocked and allowed sites are applied on this device, in the address bar of " +
+                "every browser and inside the built-in one.",
             style = MaterialTheme.typography.bodySmall,
             color = SafetyPalette.Slate,
         )
-        Spacer(Modifier.height(12.dp))
-        Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            FilteringMode.entries.forEach { option ->
-                FilterPill(
-                    text = option.shortLabel(),
-                    selected = option == mode,
-                    onClick = { onSelectMode(option) },
-                )
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-        Text(
-            text = mode.label,
-            style = MaterialTheme.typography.titleSmall,
-            color = SafetyPalette.Ink,
+        Spacer(Modifier.height(16.dp))
+        PrivateDnsSetup(
+            state = state,
+            onSelectResolver = onSelectResolver,
+            onRefresh = onRefresh,
         )
-        Spacer(Modifier.height(3.dp))
-        Text(
-            text = mode.summary,
-            style = MaterialTheme.typography.bodySmall,
-            color = SafetyPalette.Slate,
-        )
-        Spacer(Modifier.height(10.dp))
-        NetworkCapability.entries.forEach { capability ->
-            val supported = mode.supports(capability)
-            Row(
-                modifier = Modifier.padding(vertical = 3.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    imageVector = if (supported) Icons.Rounded.Check else Icons.Rounded.Close,
-                    contentDescription = if (supported) "Supported" else "Not supported",
-                    tint = if (supported) SafetyPalette.Mint else SafetyPalette.Mist,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.size(8.dp))
-                Text(
-                    text = capability.label,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (supported) SafetyPalette.Ink else SafetyPalette.Slate,
-                )
-            }
-        }
-
-        if (mode.usesPrivateDns) {
-            Spacer(Modifier.height(16.dp))
-            PrivateDnsSetup(
-                state = state,
-                onSelectResolver = onSelectResolver,
-                onRefresh = onRefresh,
-            )
-        }
     }
 }
 
@@ -718,7 +600,7 @@ private fun PrivateDnsSetup(
         modifier = Modifier.horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        FilteringMode.demoResolvers.forEach { resolver ->
+        PrivateDnsGuard.resolvers.forEach { resolver ->
             FilterPill(
                 text = resolver.label,
                 selected = resolver.hostname == hostname,
@@ -726,7 +608,7 @@ private fun PrivateDnsSetup(
             )
         }
     }
-    FilteringMode.demoResolvers.firstOrNull { it.hostname == hostname }?.let { resolver ->
+    PrivateDnsGuard.resolvers.firstOrNull { it.hostname == hostname }?.let { resolver ->
         Spacer(Modifier.height(4.dp))
         Text(
             text = resolver.covers,
@@ -764,6 +646,27 @@ private fun PrivateDnsSetup(
         )
     }
 
+    if (state.lockdown.privateDnsLocked) {
+        // A managed device: the app set the resolver itself and Android will not let it be
+        // changed, so the manual steps would only invite a parent to undo what is already done.
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = "This device is managed, so this app has set Private DNS to the hostname " +
+                "above and locked it. It cannot be changed in Settings.",
+            style = MaterialTheme.typography.bodySmall,
+            color = SafetyPalette.Mint,
+        )
+        return
+    }
+    state.lockdown.error?.let { error ->
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = error,
+            style = MaterialTheme.typography.bodySmall,
+            color = SafetyPalette.Danger,
+        )
+    }
+
     Spacer(Modifier.height(10.dp))
     Text(
         text = "1. Copy the hostname above.\n" +
@@ -779,6 +682,9 @@ private fun PrivateDnsSetup(
     SecondaryButton(
         text = "Open Settings",
         onClick = {
+            // The VPN settings guard covers the Private DNS screen too; without this it would
+            // close the screen the parent is being sent to.
+            SurfaceGuard.openForParentSetup()
             val opened = runCatching {
                 context.startActivity(
                     android.content.Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS),
@@ -805,11 +711,14 @@ private fun PrivateDnsSetup(
     Spacer(Modifier.height(12.dp))
     // What to expect, stated on the screen that offers the capability (rule 4).
     Text(
-        text = "What to expect: Android does not let any app lock this setting, so it can be " +
-            "changed back in Settings in a few taps. This app checks it every few seconds and " +
-            "alerts you when it changes. Your own blocked and allowed sites are applied on this " +
-            "device and do not reach a public resolver; per-family lists through Private DNS " +
-            "need a resolver of our own, which is Phase 1 work.",
+        text = "What to expect: on a phone that is not managed, Android does not let any app " +
+            "lock this setting, so it can be changed back in Settings in a few taps. With VPN " +
+            "restriction on, the Private DNS screen is closed when the child opens it, this " +
+            "app checks the setting every few seconds, and you are alerted when it changes. " +
+            "Ads in other apps are not removed, because a public resolver does not refuse " +
+            "them. Your own blocked and allowed sites are applied in browsers on this device " +
+            "and do not reach a public resolver; per-family lists through Private DNS need a " +
+            "resolver of our own, which is Phase 1 work.",
         style = MaterialTheme.typography.bodySmall,
         color = SafetyPalette.Slate,
     )

@@ -8,15 +8,20 @@ import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material.icons.rounded.Tune
-import androidx.compose.material.icons.rounded.VpnKey
+import androidx.compose.material.icons.rounded.Router
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.example.childsafetyimpl.core.common.TimeFormat
 import com.example.childsafetyimpl.navigation.HandleNavigation
 import com.example.childsafetyimpl.navigation.LocalNavController
+import com.example.childsafetyimpl.platform.network.PrivateDnsGuard
 import com.example.childsafetyimpl.ui.components.DetailRow
 import com.example.childsafetyimpl.ui.components.SecondaryButton
 import com.example.childsafetyimpl.ux.common.BulletLine
@@ -31,14 +36,23 @@ import com.example.childsafetyimpl.ux.common.SettingSwitchRow
  *
  * The screen exists because the honest answer to "why did Chrome show that" has two halves that
  * work in completely different ways, and a parent cannot judge the protection without being told
- * which half is running. SafeSearch is forced at the name-lookup layer and needs the tunnel; the
- * search itself is read on screen and needs the accessibility service. Either can be running
- * without the other, so the card says which.
+ * which half is running. Sites and SafeSearch are handled by the Private DNS resolver, and only as
+ * far as that resolver goes; the search itself, and the parent's own site lists, are read on
+ * screen and need the accessibility service. Either can be running without the other, so the card
+ * says which.
  */
 @Composable
 fun SearchFilteringScreen(viewModel: SearchFilteringViewModel) {
     HandleNavigation(viewModel, LocalNavController.current)
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    // Private DNS has no change notification, so it is re-read whenever this screen comes back.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            viewModel.onEvent(SearchFilteringUiEvent.RefreshPrivateDns)
+        }
+    }
+
     val status = state.status ?: return
 
     ProtectionScaffold(
@@ -47,7 +61,7 @@ fun SearchFilteringScreen(viewModel: SearchFilteringViewModel) {
         onToggle = { viewModel.onEvent(SearchFilteringUiEvent.ToggleFeature(it)) },
         heroStats = listOf(
             state.searchesClosed.toString() to "Searches closed",
-            state.safeSearchForced.toString() to "SafeSearch forced",
+            (if (state.privateDnsFiltering) "On" else "Off") to "Private DNS",
             state.termCount.toString() to "Terms watched",
         ),
     ) {
@@ -63,29 +77,49 @@ fun SearchFilteringScreen(viewModel: SearchFilteringViewModel) {
                     "judged in memory and never written down.",
             )
 
-            !state.tunnelRunning -> OutcomeCard(
-                headline = "SafeSearch is forced only inside this app",
-                detail = "Forcing SafeSearch in Chrome and every other browser happens at the " +
-                    "name-lookup layer, which needs the filtering tunnel. It is not running, so " +
-                    "outside this app the search engine's own setting applies.",
+            !state.privateDnsFiltering -> OutcomeCard(
+                headline = "Other apps are not being filtered",
+                detail = "Sites and SafeSearch are filtered by the resolver Android's Private " +
+                    "DNS points at, and it is not pointed at one that filters. Outside the " +
+                    "built-in browser, harmful sites load and the search engine's own setting " +
+                    "applies.",
                 tone = OutcomeTone.WARNING,
-                footnote = "Searches for restricted things are still read and closed.",
+                footnote = "Searches for restricted things, and your own blocked sites, are " +
+                    "still read and closed in browsers.",
+            )
+
+            state.resolver?.forcesSafeSearch == false -> OutcomeCard(
+                headline = "Sites are filtered, SafeSearch is not forced",
+                detail = "${state.resolver?.label} refuses harmful sites for every app but does " +
+                    "not force SafeSearch, so search results follow the search engine's own " +
+                    "setting outside the built-in browser.",
+                tone = OutcomeTone.WARNING,
+                footnote = "CleanBrowsing Family forces it. Change the resolver on Controls.",
             )
 
             else -> OutcomeCard(
-                headline = "SafeSearch is forced device-wide",
-                detail = "Google, Bing, DuckDuckGo and YouTube are answered with the filtered " +
-                    "address each one publishes, so SafeSearch cannot be switched off from " +
-                    "inside any browser on this device.",
+                headline = "Every app is filtered",
+                detail = "Name lookups from every app go to " +
+                    (state.resolver?.label ?: "a filtering resolver") + " through Private DNS, " +
+                    "which refuses harmful sites" +
+                    when {
+                        state.resolver?.restrictsYouTube == true ->
+                            " and forces SafeSearch on Google, Bing and YouTube, so it cannot " +
+                                "be switched off from inside a browser."
+                        state.resolver?.forcesSafeSearch == true ->
+                            " and forces SafeSearch on Google and Bing. YouTube is not put " +
+                                "in Restricted Mode by this resolver."
+                        else -> "."
+                    },
                 tone = OutcomeTone.SUCCESS,
             )
         }
 
         ProtectionSection(title = "Settings", icon = Icons.Rounded.Tune) {
             SettingSwitchRow(
-                title = "Force SafeSearch everywhere",
-                description = "Answers search-engine lookups with the filtered address they " +
-                    "publish. Applies to every app, not only this one.",
+                title = "Force SafeSearch in the built-in browser",
+                description = "Rewrites searches in this app's own browser to their SafeSearch " +
+                    "form. In every other app SafeSearch is the resolver's job.",
                 checked = state.safeSearchEnabled,
                 onCheckedChange = { viewModel.onEvent(SearchFilteringUiEvent.ToggleSafeSearch(it)) },
             )
@@ -102,19 +136,22 @@ fun SearchFilteringScreen(viewModel: SearchFilteringViewModel) {
         ProtectionSection(title = "What is being watched", icon = Icons.Rounded.SearchOff) {
             DetailRow("Browsers recognised", state.browserCount.toString())
             DetailRow("Restricted terms", state.termCount.toString())
-            DetailRow("SafeSearch answers given", state.safeSearchForced.toString())
             DetailRow("Searches closed", state.searchesClosed.toString())
             DetailRow(
-                "Encrypted DNS",
-                if (state.tunnelRunning) "Refused, so lookups stay filtered" else "Not filtered",
+                "Resolver",
+                when (val posture = state.privateDnsPosture) {
+                    is PrivateDnsGuard.Posture.Filtering ->
+                        state.resolver?.label ?: posture.host
+                    else -> "Not filtering"
+                },
             )
 
             Spacer(Modifier.height(14.dp))
-            if (!state.tunnelRunning) {
+            if (!state.privateDnsFiltering) {
                 SecondaryButton(
-                    text = "Start the filtering tunnel",
-                    onClick = { viewModel.onEvent(SearchFilteringUiEvent.OpenVpn) },
-                    icon = Icons.Rounded.VpnKey,
+                    text = "Set up Private DNS",
+                    onClick = { viewModel.onEvent(SearchFilteringUiEvent.OpenControls) },
+                    icon = Icons.Rounded.Router,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(8.dp))
@@ -128,6 +165,17 @@ fun SearchFilteringScreen(viewModel: SearchFilteringViewModel) {
         }
 
         ProtectionSection(title = "What to expect", icon = Icons.Rounded.Insights) {
+            BulletLine(
+                "Sites are judged by the resolver, so what is refused is that resolver's list. " +
+                    "Your own blocked and allowed sites cannot reach a public resolver; they are " +
+                    "checked against the address bar of every browser instead, which closes the " +
+                    "browser shortly after the page starts to load rather than before.",
+            )
+            BulletLine(
+                "A browser with its own secure-DNS setting, or a site reached by its raw " +
+                    "address, can step around Private DNS. Restricting other browsers from App " +
+                    "restriction closes most of that.",
+            )
             BulletLine(
                 "SafeSearch is the search engine's own judgement. It removes explicit imagery " +
                     "from results and image search, and it does not pretend to be a topic " +

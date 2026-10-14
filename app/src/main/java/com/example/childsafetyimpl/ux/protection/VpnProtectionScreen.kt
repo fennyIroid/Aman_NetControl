@@ -25,10 +25,8 @@ import com.example.childsafetyimpl.navigation.HandleNavigation
 import com.example.childsafetyimpl.navigation.LocalNavController
 import com.example.childsafetyimpl.ui.components.DetailRow
 import com.example.childsafetyimpl.ui.components.IconBadge
-import com.example.childsafetyimpl.ui.components.PrimaryButton
 import com.example.childsafetyimpl.ui.components.SecondaryButton
 import com.example.childsafetyimpl.ui.components.TonalChip
-import com.example.childsafetyimpl.ui.illustration.NetworkFlow
 import com.example.childsafetyimpl.ui.theme.SafetyPalette
 import com.example.childsafetyimpl.ux.common.OutcomeCard
 import com.example.childsafetyimpl.ux.common.OutcomeTone
@@ -48,8 +46,8 @@ fun VpnProtectionScreen(viewModel: VpnProtectionViewModel) {
         onToggle = { viewModel.onEvent(VpnProtectionUiEvent.ToggleFeature(it)) },
         heroStats = listOf(
             state.vpnApps.size.toString() to "VPN apps",
-            state.counters.reclaims.toString() to "Reclaims",
-            (if (state.tunnelRunning) "On" else "Off") to "Our tunnel",
+            state.refusedRequests.toString() to "Requests refused",
+            state.lockouts.toString() to "Apps blocked",
         ),
     ) {
         // The live picture first. A parent opening this screen is usually asking one question:
@@ -63,21 +61,21 @@ fun VpnProtectionScreen(viewModel: VpnProtectionViewModel) {
                 detail = "A tunnel this app does not own is active" +
                     posture.tunnelInterfaces.takeIf { it.isNotEmpty() }
                         ?.let { " on ${it.joinToString()}" }.orEmpty() +
-                    ". While it is up, filtering is going around this app.",
+                    ". While it is up, its traffic goes around the Private DNS filter.",
                 tone = OutcomeTone.BLOCKED,
-                footnote = if (state.reclaimTunnel) {
-                    "Protection is taking the tunnel back automatically."
+                footnote = if (state.vpnLockout) {
+                    "Every app but Settings and the phone is blocked until it is switched off."
                 } else {
-                    "Tunnel reclaiming is switched off, so this is a report only."
+                    "Blocking the phone while a VPN is on is switched off, so this is a report only."
                 },
             )
 
             posture.encryptedDnsHost != null -> OutcomeCard(
                 headline = "Private DNS is bypassing the filter",
-                detail = "Name lookups are going to ${posture.encryptedDnsHost} over an encrypted " +
-                    "channel that this app cannot read. No app can change that setting for you.",
+                detail = "Name lookups are going to ${posture.encryptedDnsHost}, a resolver that " +
+                    "does not filter, over an encrypted channel this app cannot read.",
                 tone = OutcomeTone.WARNING,
-                footnote = "Turn Private DNS off in Android Settings to restore filtering.",
+                footnote = "Put the filtering hostname back from Controls, How filtering works.",
             )
 
             else -> OutcomeCard(
@@ -92,17 +90,19 @@ fun VpnProtectionScreen(viewModel: VpnProtectionViewModel) {
             icon = Icons.Rounded.Shield,
         ) {
             SettingSwitchRow(
-                title = "Close VPN apps on open",
-                description = "A VPN app is closed the moment the child opens it.",
+                title = "Refuse VPN requests and close VPN apps",
+                description = "Cancels Android's VPN connection request before it can be " +
+                    "accepted, and closes a VPN app the moment the child opens it. Refusing " +
+                    "requests needs the accessibility service.",
                 checked = state.blockVpnApps,
                 onCheckedChange = { viewModel.onEvent(VpnProtectionUiEvent.ToggleBlockApps(it)) },
             )
             SettingSwitchRow(
-                title = "Take the tunnel back",
-                description = "Android allows one VPN at a time. Re-establishing ours ends " +
-                    "whichever VPN has claimed it.",
-                checked = state.reclaimTunnel,
-                onCheckedChange = { viewModel.onEvent(VpnProtectionUiEvent.ToggleReclaim(it)) },
+                title = "Block the phone while a VPN is on",
+                description = "If a VPN connects anyway, every app but Settings and the phone " +
+                    "is blocked until it is switched off.",
+                checked = state.vpnLockout,
+                onCheckedChange = { viewModel.onEvent(VpnProtectionUiEvent.ToggleLockout(it)) },
             )
             SettingSwitchRow(
                 title = "Close the VPN settings screen",
@@ -153,40 +153,41 @@ fun VpnProtectionScreen(viewModel: VpnProtectionViewModel) {
         }
 
         ProtectionSection(
-            title = "The filtering tunnel",
+            title = "How a VPN is stopped",
             icon = Icons.Rounded.Dns,
         ) {
-            NetworkFlow(active = state.tunnelRunning, modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(14.dp))
-
-            if (state.tunnelRunning) {
-                DetailRow("Names looked up", state.counters.total.toString())
-                DetailRow("Refused", state.counters.blocked.toString())
-                DetailRow("Ad hosts refused", state.counters.adsBlocked.toString())
-                DetailRow("Tunnel reclaimed", state.counters.reclaims.toString())
-                // The address-level half of the encrypted-DNS defence. Its own row because a
-                // lookup refused by name and a packet dropped by address are different events,
-                // and only the second one proves the bootstrap-IP bypass is closed.
-                DetailRow(
-                    "Encrypted DNS packets dropped",
-                    state.counters.encryptedDnsDrops.toString(),
-                )
-                DetailRow("Refused while paused", state.counters.pausedDrops.toString())
-            } else {
+            if (state.vpnForbiddenByPolicy) {
                 Text(
-                    text = "Our tunnel is not running. VPN apps are still closed on open, but " +
-                        "the tunnel cannot be taken back from another VPN until this one has " +
-                        "been allowed once.",
+                    text = "This device is managed, and this app has forbidden VPN setup by " +
+                        "policy. Android refuses to start any VPN, so the steps below are a " +
+                        "backstop.",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = SafetyPalette.Slate,
+                    color = SafetyPalette.Mint,
                 )
-                Spacer(Modifier.height(14.dp))
-                PrimaryButton(
-                    text = "Start the tunnel",
-                    onClick = { viewModel.onEvent(VpnProtectionUiEvent.ReclaimNow) },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                Spacer(Modifier.height(12.dp))
             }
+            DetailRow("Connection requests refused", state.refusedRequests.toString())
+            DetailRow("VPN apps closed", state.blockedLaunches.toString())
+            DetailRow("Apps blocked while a VPN was on", state.lockouts.toString())
+            DetailRow(
+                "Refusing requests",
+                if (state.canRefuseRequests) "Ready" else "Needs the accessibility service",
+            )
+        }
+
+        ProtectionSection(title = "What to expect", icon = Icons.Rounded.Shield) {
+            Text(
+                text = "This app uses no VPN of its own for filtering, so it cannot end another " +
+                    "VPN by taking its place. Instead a VPN is refused before it starts, its app " +
+                    "is closed, and if one connects anyway — one allowed before this app was " +
+                    "installed, or one set up by hand in Settings — the phone is blocked until " +
+                    "it is off. The child is sent to Settings to switch it off, which they can " +
+                    "always reach. Without the accessibility service a new VPN is not refused; " +
+                    "without usage access or permission to draw over apps it is reported, not " +
+                    "blocked. Only a managed device can forbid VPNs outright.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = SafetyPalette.Slate,
+            )
         }
     }
 }

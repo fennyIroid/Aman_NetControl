@@ -20,7 +20,7 @@ import kotlin.math.min
  *  2. **A pixel heuristic.** Skin-tone proportion, region contiguity and surrounding detail. This
  *     was the original scorer and is now demoted to corroboration.
  *
- * The fusion rule is the part that matters. Skin measurements alone can no longer flag an image:
+ * The fusion rule is the part that matters. Skin measurements alone can never cover an image:
  * a portrait or a beach photo scores high on skin proportion and would previously have been
  * covered. The heuristic now only amplifies a verdict the model has already given semantic reason
  * to suspect, which is what removes that class of false positive.
@@ -253,9 +253,14 @@ class ImageSafetyClassifier @Inject constructor(
         val corroborated = clothing > 0f || body >= BODY_CORROBORATES
 
         val fused = when {
-            // No semantic evidence at all. Fall back to pixels, damped, because the heuristic
-            // alone is not trustworthy enough to cover an image confidently.
-            labels.isEmpty() -> heuristicScore * 0.65f
+            // No semantic evidence at all. Pixels alone may flag a picture for the log and never
+            // cover it, at any strictness. A labeller with nothing to say about a picture is
+            // almost always looking at a drawing, a gradient or a piece of interface, and those are
+            // what a skin-tone count gets wrong: driven on a Galaxy M36, a peach home-screen
+            // wallpaper scored 0.49 here and was covered. A photograph of a body is the thing the
+            // labeller does have words for — Skin, Flesh, Muscle — so explicit content still
+            // reaches the branches below. See PIXEL_ONLY_CEILING.
+            labels.isEmpty() -> minOf(heuristicScore * 0.65f, PIXEL_ONLY_CEILING)
 
             // The model saw a body. Only now do pixel measurements get to weigh in.
             corroborated -> (modelScore * 0.7f + heuristicScore * 0.3f)
@@ -303,8 +308,9 @@ class ImageSafetyClassifier @Inject constructor(
         }
 
         if (labels.isEmpty()) {
-            return "The bundled model returned no labels it was confident about, so this verdict " +
-                "rests on pixel measurements alone and is damped accordingly. " + heuristic.explanation
+            return "The bundled model returned no labels it was confident about, so this rests on " +
+                "pixel measurements alone, which can flag a picture but never cover it. " +
+                heuristic.explanation
         }
 
         val top = labels.sortedByDescending { it.confidence }
@@ -565,6 +571,15 @@ class ImageSafetyClassifier @Inject constructor(
          * picture over the line by itself once something better is in the room.
          */
         const val PROXY_SHARE_WHEN_TRAINED = 0.6f
+
+        /**
+         * The most a verdict built from pixels alone can score.
+         *
+         * Just under the strictest level's threshold, so it can still be flagged as borderline in
+         * the log but no setting a parent can choose makes it cover. A test holds it under every
+         * level, so a stricter level added later cannot quietly bring pixel-only covers back.
+         */
+        const val PIXEL_ONLY_CEILING = 0.29f
 
         const val UNSAFE_THRESHOLD = 0.42f
         const val BORDERLINE_THRESHOLD = 0.28f

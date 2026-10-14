@@ -16,7 +16,7 @@ import com.example.childsafetyimpl.platform.content.PrivateTabAction
 import com.example.childsafetyimpl.platform.content.ProtectionLevel
 import com.example.childsafetyimpl.platform.content.SubjectCategory
 import com.example.childsafetyimpl.platform.content.ValuesCategory
-import com.example.childsafetyimpl.platform.network.FilteringMode
+import com.example.childsafetyimpl.platform.network.PrivateDnsGuard
 import com.example.childsafetyimpl.domain.model.RestrictedSurface
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -55,8 +55,11 @@ data class SafetySettings(
 
     /** Closes a VPN app the moment it is opened. */
     val blockVpnApps: Boolean = true,
-    /** Takes the device tunnel back when another VPN claims it. */
-    val reclaimTunnel: Boolean = true,
+    /**
+     * Blocks every app but Settings and the phone while another VPN is connected. This app holds
+     * no tunnel to take back, so this is what makes a VPN that got past the other layers useless.
+     */
+    val vpnLockout: Boolean = true,
     /** Closes the system VPN settings screen. */
     val blockVpnSettings: Boolean = true,
 
@@ -136,15 +139,11 @@ data class SafetySettings(
     val internetPaused: Boolean = false,
 
     /**
-     * How device-wide web filtering is delivered: the tunnel, Android's Private DNS, or Private DNS
-     * with the tunnel raised only while a feature needs it.
-     *
-     * Defaults to the tunnel, which is how every install before this setting existed behaved, so
-     * nobody's filtering changes underneath them on update. See [FilteringMode].
+     * The filtering resolver Private DNS should point at. Web filtering runs through Private DNS
+     * and nothing else, so this is the parent's choice of filter: entered by the parent in
+     * Settings, or written and locked by the app on a managed device.
      */
-    val filteringMode: FilteringMode = FilteringMode.VPN_TUNNEL,
-    /** The Private DNS hostname the parent was told to enter. Only read in the DNS modes. */
-    val privateDnsHostname: String = FilteringMode.DEFAULT_PRIVATE_DNS_HOST,
+    val privateDnsHostname: String = PrivateDnsGuard.DEFAULT_HOST,
 
     val dailyScreenTimeLimitMinutes: Int = 240,
     val bedtimeStartMinuteOfDay: Int = 21 * 60,
@@ -214,7 +213,7 @@ open class SafetyPreferences(private val context: Context) {
         val aiConversationScan = booleanPreferencesKey("ai_conversation_scan")
 
         val blockVpnApps = booleanPreferencesKey("block_vpn_apps")
-        val reclaimTunnel = booleanPreferencesKey("reclaim_tunnel")
+        val vpnLockout = booleanPreferencesKey("vpn_lockout")
         val blockVpnSettings = booleanPreferencesKey("block_vpn_settings")
         val blockCloneTools = booleanPreferencesKey("block_clone_tools")
 
@@ -234,7 +233,6 @@ open class SafetyPreferences(private val context: Context) {
         val notificationSignals = booleanPreferencesKey("notification_signals")
 
         val internetPaused = booleanPreferencesKey("internet_paused")
-        val filteringMode = stringPreferencesKey("filtering_mode")
         val privateDnsHostname = stringPreferencesKey("private_dns_hostname")
 
         val dailyLimit = intPreferencesKey("daily_screen_limit")
@@ -279,7 +277,7 @@ open class SafetyPreferences(private val context: Context) {
                 aiConversationScanEnabled = prefs[Keys.aiConversationScan] ?: true,
 
                 blockVpnApps = prefs[Keys.blockVpnApps] ?: true,
-                reclaimTunnel = prefs[Keys.reclaimTunnel] ?: true,
+                vpnLockout = prefs[Keys.vpnLockout] ?: true,
                 blockVpnSettings = prefs[Keys.blockVpnSettings] ?: true,
                 blockCloneTools = prefs[Keys.blockCloneTools] ?: true,
 
@@ -299,11 +297,8 @@ open class SafetyPreferences(private val context: Context) {
                 bedtimeEndMinuteOfDay = prefs[Keys.bedtimeEnd] ?: (7 * 60),
 
                 internetPaused = prefs[Keys.internetPaused] ?: false,
-                filteringMode = prefs[Keys.filteringMode]
-                    ?.let { stored -> FilteringMode.entries.firstOrNull { it.name == stored } }
-                    ?: FilteringMode.VPN_TUNNEL,
                 privateDnsHostname = prefs[Keys.privateDnsHostname]
-                    ?: FilteringMode.DEFAULT_PRIVATE_DNS_HOST,
+                    ?: PrivateDnsGuard.DEFAULT_HOST,
                 blurProtectionLevel = prefs[Keys.blurLevel]
                     ?.let { stored -> ProtectionLevel.entries.firstOrNull { it.name == stored } }
                     ?: ProtectionLevel.default,
@@ -381,7 +376,7 @@ open class SafetyPreferences(private val context: Context) {
         putBoolean(Keys.aiConversationScan, enabled)
 
     suspend fun setBlockVpnApps(enabled: Boolean) = putBoolean(Keys.blockVpnApps, enabled)
-    suspend fun setReclaimTunnel(enabled: Boolean) = putBoolean(Keys.reclaimTunnel, enabled)
+    suspend fun setVpnLockout(enabled: Boolean) = putBoolean(Keys.vpnLockout, enabled)
     suspend fun setBlockVpnSettings(enabled: Boolean) = putBoolean(Keys.blockVpnSettings, enabled)
     suspend fun setBlockCloneTools(enabled: Boolean) = putBoolean(Keys.blockCloneTools, enabled)
 
@@ -439,10 +434,6 @@ open class SafetyPreferences(private val context: Context) {
     /** Written before the pause is applied, so a crash leaves the device paused, not online. */
     open suspend fun setInternetPaused(paused: Boolean) {
         context.safetyDataStore.edit { it[Keys.internetPaused] = paused }
-    }
-
-    open suspend fun setFilteringMode(mode: FilteringMode) {
-        context.safetyDataStore.edit { it[Keys.filteringMode] = mode.name }
     }
 
     suspend fun setPrivateDnsHostname(hostname: String) {

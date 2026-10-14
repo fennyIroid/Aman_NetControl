@@ -276,6 +276,46 @@ class HostFilterTest {
         assertTrue(repository(emptyList(), blockedCategories = emptySet()).evaluateHost("free-porn.example").allowed)
         assertTrue(repository(emptyList()).evaluateHost("essex.ac.uk").allowed)
     }
+
+    // --- Ways round the resolver -------------------------------------------------------------
+
+    @Test
+    fun `a public address opened directly is refused while filtering is on`() = runTest(dispatcher) {
+        val repository = repository(emptyList())
+        listOf("66.254.114.41", "[2606:4700::6810:84e5]", "2606:4700::6810:84e5", "66-254-114-41.sslip.io")
+            .forEach { assertFalse(it, repository.evaluateHost(it).allowed) }
+    }
+
+    @Test
+    fun `a router, a printer or the phone itself is never refused for being an address`() = runTest(dispatcher) {
+        val repository = repository(emptyList())
+        listOf("192.168.1.1", "10.0.0.138", "172.20.4.2", "127.0.0.1", "[fe80::1]", "[::1]", "192.168.0.1.nip.io")
+            .forEach { assertTrue(it, repository.evaluateHost(it).allowed) }
+    }
+
+    @Test
+    fun `addresses are not refused when the parent filters nothing`() = runTest(dispatcher) {
+        assertTrue(repository(emptyList(), blockedCategories = emptySet()).evaluateHost("66.254.114.41").allowed)
+    }
+
+    @Test
+    fun `a parent can allow an address by hand`() = runTest(dispatcher) {
+        val allow = DomainRuleEntity(
+            id = 1, pattern = "203.0.113.7", category = WebCategory.UNCATEGORISED,
+            action = RuleAction.ALLOW, source = RuleSource.PARENT, enabled = true,
+        )
+        assertTrue(repository(listOf(allow)).evaluateHost("203.0.113.7").allowed)
+    }
+
+    @Test
+    fun `a relay is refused for the site it carries, and only for that`() = runTest(dispatcher) {
+        val repository = repository(listOf(blockRule("bad-site.com", WebCategory.ADULT)))
+        val carried = repository.evaluateHost("www-bad--site-com.translate.goog")
+        assertFalse(carried.allowed)
+        assertEquals(WebCategory.ADULT, carried.category)
+        assertFalse(repository.evaluateHost("bad--site-com.cdn.ampproject.org").allowed)
+        assertTrue(repository.evaluateHost("www-bbc-co-uk.translate.goog").allowed)
+    }
 }
 
 // --- fakes -------------------------------------------------------------------------------------

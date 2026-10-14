@@ -44,9 +44,9 @@ enum class SafetyPermission(
     ),
     VPN_CONSENT(
         title = "VPN Consent",
-        grants = "A local TUN interface carrying this device's outbound traffic.",
-        enables = "Filtering and ad removal across every app, and VPN bypass prevention.",
-        withoutIt = "Filtering and ad removal work only inside this app's own browser and player.",
+        grants = "A local tunnel that holds this device's traffic, raised only while paused.",
+        enables = "Internet Pause. Filtering does not use it: that runs through Private DNS.",
+        withoutIt = "The internet cannot be paused. Everything else works.",
         grantMechanism = GrantMechanism.CONSENT_DIALOG,
     ),
     SCREEN_CAPTURE(
@@ -86,9 +86,10 @@ enum class SafetyPermission(
     ),
     DEVICE_OWNER(
         title = "Device Owner / MDM",
-        grants = "Device policy authority: app disabling, always-on VPN lockdown, uninstall blocking.",
+        grants = "Device policy authority: Private DNS set and locked, VPN setup forbidden, " +
+            "app disabling, uninstall blocking.",
         enables = "The restrictions Android refuses to give an app installed from the Play Store.",
-        withoutIt = "Disabling other apps and forcing an always-on VPN stay out of reach.",
+        withoutIt = "Private DNS and VPNs are watched and pushed back on, not locked.",
         grantMechanism = GrantMechanism.DEVICE_PROVISIONING,
     );
 

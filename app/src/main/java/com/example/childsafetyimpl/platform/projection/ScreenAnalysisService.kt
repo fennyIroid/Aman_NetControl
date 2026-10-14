@@ -32,6 +32,7 @@ import com.example.childsafetyimpl.data.prefs.SafetySettings
 import com.example.childsafetyimpl.platform.content.BlurLatency
 import com.example.childsafetyimpl.platform.content.BlurMode
 import com.example.childsafetyimpl.platform.accessibility.BrowserSurfaces
+import com.example.childsafetyimpl.platform.accessibility.SafetyAccessibilityService
 import com.example.childsafetyimpl.platform.accessibility.ScreenSignalStore
 import com.example.childsafetyimpl.platform.content.PrivateTabTracker
 import com.example.childsafetyimpl.platform.content.SecureFrame
@@ -50,6 +51,8 @@ import androidx.core.graphics.get
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -241,8 +244,17 @@ class ScreenAnalysisService : Service() {
     /** The display's height in pixels, which is what the app's scroll reports are measured in. */
     @Volatile private var screenHeightPx = 1
 
-    /** Whether a browser's private tab is in front; see notePrivateTab. */
+    /** Whether a browser's private tab is in front; see notePrivateTab. Guarded by itself. */
     private val privateTabs = PrivateTabTracker()
+
+    /** Re-reads the last clear frame once the screen has been still; see confirmPrivateTabStill. */
+    private var privateStillCheck: Job? = null
+
+    /** When Android last confirmed the private tab's window is secure; see verifyPrivateTab. */
+    @Volatile private var privateVerifiedAt = 0L
+
+    /** A browser Android just said is not secure, and when, so a run of black frames asks once. */
+    @Volatile private var notSecure: Pair<String, Long>? = null
 
     /** The display's width in pixels, for placing the private-tab covers on the frame. */
     @Volatile private var screenWidthPx = 1
@@ -790,7 +802,7 @@ class ScreenAnalysisService : Service() {
      * change. See PrivateTabTracker for why both a browser and a black window are needed, and
      * SecureFrame for why the private-tab covers are left out of the test.
      */
-    private fun notePrivateTab(bitmap: Bitmap, frameTime: Long): Boolean {
+    private suspend fun notePrivateTab(bitmap: Bitmap, frameTime: Long): Boolean {
         val app = signalStore.activeApp.value
         val sx = bitmap.width.toFloat() / screenWidthPx
         val sy = bitmap.height.toFloat() / screenHeightPx
@@ -803,23 +815,82 @@ class ScreenAnalysisService : Service() {
         }
         // The store can end a tab on its own when another app comes into use, and start one when
         // the child returns to a browser they left while it was private; the tracker follows both.
-        val published = signalStore.privateTab.value
-        if (published == null && privateTabs.current != null) privateTabs.reset()
-        if (published != null && privateTabs.current != published) privateTabs.adopt(published)
-        val next = privateTabs.next(
-            foreground = app,
-            foregroundIsBrowser = BrowserSurfaces.isBrowser(app),
-            blackedOut = blackedOut,
-            now = SystemClock.uptimeMillis(),
-        )
-        if (next != signalStore.privateTab.value) {
-            if (BuildConfig.DEBUG) {
-                Log.d(TAG, "private tab $published -> $next: app=$app blackedOut=$blackedOut " +
-                    "ignoring ${ignore.size} covers")
-            }
-            signalStore.setPrivateTab(next)
+        val now = SystemClock.uptimeMillis()
+        val (published, proposed) = synchronized(privateTabs) {
+            val published = signalStore.privateTab.value
+            if (published == null && privateTabs.current != null) privateTabs.reset()
+            if (published != null && privateTabs.current != published) privateTabs.adopt(published)
+            published to privateTabs.next(
+                foreground = app,
+                foregroundIsBrowser = BrowserSurfaces.isBrowser(app) && !recentlyNotSecure(app, now),
+                blackedOut = blackedOut,
+                now = now,
+            )
         }
+        val vetoed = proposed != null && !verifyPrivateTab(proposed, isNew = proposed != published, now)
+        val next = synchronized(privateTabs) {
+            if (vetoed) {
+                privateTabs.reset()
+                if (BuildConfig.DEBUG) Log.d(TAG, "private tab $proposed refused: window not secure")
+            }
+            val next = privateTabs.current
+            if (next != published) {
+                if (BuildConfig.DEBUG) {
+                    Log.d(TAG, "private tab $published -> $next: app=$app blackedOut=$blackedOut " +
+                        "ignoring ${ignore.size} covers")
+                }
+                signalStore.setPrivateTab(next)
+            }
+            next
+        }
+        // Every frame replaces the pending check: a newer frame is newer evidence.
+        privateStillCheck?.cancel()
+        if (next != null && blackedOut == false) confirmPrivateTabStill()
         return next != null
+    }
+
+    /**
+     * False when Android says [packageName]'s window is not secure, so the black frames that made
+     * it look private were something else — a navigation, a tab switch, a black video. True when
+     * Android says it is secure, and when Android cannot say, which keeps the frame evidence in
+     * charge on versions without the probe (rule 12). A new tab is always asked about before its
+     * covers go up; one already covered is asked again at most once per [PRIVATE_REVERIFY_MILLIS],
+     * because a whole-page cover hides the page from the frames that would otherwise end it, and
+     * a wrong one stood over an ordinary Chrome page until the app was restarted.
+     */
+    private suspend fun verifyPrivateTab(packageName: String, isNew: Boolean, now: Long): Boolean {
+        if (!isNew && now - privateVerifiedAt < PRIVATE_REVERIFY_MILLIS) return true
+        val secure = SafetyAccessibilityService.isActiveWindowSecure(packageName)
+        if (BuildConfig.DEBUG) Log.d(TAG, "private tab $packageName: Android says secure=$secure")
+        if (secure == false) {
+            notSecure = packageName to now
+            return false
+        }
+        if (secure == true) privateVerifiedAt = now
+        return true
+    }
+
+    private fun recentlyNotSecure(packageName: String, now: Long): Boolean =
+        notSecure?.let { (app, at) -> app == packageName && now - at < NOT_SECURE_MEMORY_MILLIS } == true
+
+    /**
+     * Ends a private tab on a screen that has gone still after a clear frame.
+     *
+     * A still screen sends no second frame (rule 28), so without this a tab left for a normal one
+     * kept its covers until something moved. See PrivateTabTracker.confirmStill.
+     */
+    private fun confirmPrivateTabStill() {
+        privateStillCheck = scope.launch {
+            delay(PrivateTabTracker.EXIT_AFTER_MILLIS + STILL_CHECK_MARGIN_MILLIS)
+            synchronized(privateTabs) {
+                val before = signalStore.privateTab.value
+                val after = privateTabs.confirmStill(SystemClock.uptimeMillis())
+                if (before != null && after == null) {
+                    if (BuildConfig.DEBUG) Log.d(TAG, "private tab $before -> null: screen still")
+                    signalStore.setPrivateTab(null)
+                }
+            }
+        }
     }
 
     /**
@@ -1223,8 +1294,9 @@ class ScreenAnalysisService : Service() {
         // A stopped session must never leave the screen covered with nothing running to lift it.
         // That includes the private-tab covers: nothing would be left to say the tab had closed.
         overlayController.clearCover()
+        privateStillCheck?.cancel()
         signalStore.setPrivateTab(null)
-        privateTabs.reset()
+        synchronized(privateTabs) { privateTabs.reset() }
         activeCovers = emptyList()
         lastSignature = null
         lastProfile = null
@@ -1465,6 +1537,18 @@ class ScreenAnalysisService : Service() {
 
     companion object {
         private const val TAG = "ScreenAnalysis"
+
+        /** A little past the tracker's window, so the check never lands a frame early. */
+        private const val STILL_CHECK_MARGIN_MILLIS = 50L
+
+        /** How often a covered private tab is checked again with Android; see verifyPrivateTab. */
+        private const val PRIVATE_REVERIFY_MILLIS = 1_000L
+
+        /**
+         * How long a browser Android said is not secure is not asked about again. Short, because
+         * switching to a real incognito tab inside that time is covered once it runs out.
+         */
+        private const val NOT_SECURE_MEMORY_MILLIS = 1_500L
 
         const val ACTION_STOP = "com.example.childsafetyimpl.STOP_CAPTURE"
         const val EXTRA_RESULT_CODE = "result_code"

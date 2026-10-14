@@ -47,7 +47,6 @@ class ProtectionHealthTest {
         pauseRequested: Boolean = false,
         pauseEnforced: Boolean = false,
         advancedProtection: Boolean = false,
-        privateDnsIsTheFilter: Boolean = false,
         privateDnsHost: String? = if (privateDnsBypassing) "dns.google" else null,
     ) = ProtectionHealth.from(
         protectionEnabled = protectionEnabled,
@@ -62,7 +61,6 @@ class ProtectionHealthTest {
         internetPauseRequested = pauseRequested,
         internetPauseEnforced = pauseEnforced,
         advancedProtectionOn = advancedProtection,
-        privateDnsIsTheFilter = privateDnsIsTheFilter,
     )
 
     @Test
@@ -186,13 +184,12 @@ class ProtectionHealthTest {
     }
 
     @Test
-    fun `when Private DNS is the filter an unset setting says to set it, not to clear it`() {
-        // "Set it back to Automatic" is right for the tunnel and exactly wrong here, where
-        // Automatic is no filter at all.
+    fun `an unset Private DNS says to set it, not to clear it`() {
+        // Private DNS is the filter, so "set it back to Automatic" is exactly wrong: Automatic is
+        // no filter at all.
         val result = health(
             privateDnsBypassing = true,
             privateDnsHost = null,
-            privateDnsIsTheFilter = true,
         )
         val issue = result.issues.first { it.kind == ProtectionHealth.IssueKind.PRIVATE_DNS_BYPASS }
         assertEquals("Private DNS is not set", issue.title)

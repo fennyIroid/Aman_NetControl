@@ -1,15 +1,14 @@
 package com.example.childsafetyimpl.platform.network
 
 import android.content.Context
-import android.content.Intent
 import android.net.VpnService
-import android.os.Build
 import com.example.childsafetyimpl.data.prefs.SafetyPreferences
 import com.example.childsafetyimpl.di.ApplicationScope
 import com.example.childsafetyimpl.domain.model.EventAction
 import com.example.childsafetyimpl.domain.model.EventSeverity
 import com.example.childsafetyimpl.domain.model.SafetyEventType
 import com.example.childsafetyimpl.domain.repository.SafetyEventRepository
+import com.example.childsafetyimpl.platform.admin.NetworkLockdown
 import com.example.childsafetyimpl.platform.alerts.SafetyNotifier
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -30,11 +29,12 @@ import javax.inject.Singleton
  *
  * Three things follow from that.
  *
- * **It runs in the tunnel, not on the radios.** An app cannot switch off Wi-Fi or mobile data on
+ * **It runs in a tunnel, not on the radios.** An app cannot switch off Wi-Fi or mobile data on
  * a modern Android release, and an app that could would be indistinguishable from malware. What
  * this app can do is hold the device's one VPN slot and refuse to carry anything, which covers
- * Wi-Fi and mobile data together because both sit underneath it. [TunnelMode.PAUSED] is that
- * posture.
+ * Wi-Fi and mobile data together because both sit underneath it. Filtering itself runs through
+ * Private DNS with no tunnel at all; [PauseTunnelService] exists for the pause and nothing else,
+ * and is up only while a pause is in force.
  *
  * **Name lookups are refused rather than dropped.** Explained where it happens, in the pump: a
  * refusal fails in milliseconds and a drop hangs for half a minute. The child reaching the notice
@@ -57,6 +57,7 @@ class InternetPauseController @Inject constructor(
     private val preferences: SafetyPreferences,
     private val eventRepository: SafetyEventRepository,
     private val notifier: SafetyNotifier,
+    private val networkLockdown: NetworkLockdown,
     @param:ApplicationScope private val scope: CoroutineScope,
 ) {
 
@@ -75,8 +76,7 @@ class InternetPauseController @Inject constructor(
      * The gap between this and [paused] is the honest part of the feature, and the protection
      * health model turns that gap into a parent alert rather than letting it sit unnoticed.
      */
-    fun isEnforced(): Boolean =
-        ChildSafetyVpnService.State.paused.value && ChildSafetyVpnService.isRunning.value
+    fun isEnforced(): Boolean = PauseTunnelService.State.running.value
 
     /** True when the tunnel cannot be driven because consent was never given or was withdrawn. */
     fun needsVpnConsent(): Boolean =
@@ -90,24 +90,16 @@ class InternetPauseController @Inject constructor(
      * pause is the failure mode this whole class exists to avoid.
      */
     suspend fun pause(): PauseOutcome {
-        // Checked before consent, because consent would not help: with Private DNS alone there is
-        // nothing in the traffic path to stop, and asking for a VPN permission the posture was
-        // chosen to avoid would be the wrong answer to give a parent.
-        val filtering = preferences.settings.first().filteringMode
-        if (!filtering.canPauseInternet) {
-            return PauseOutcome.Failed(
-                "${filtering.label} cannot pause the internet: a resolver cannot stop a " +
-                    "connection that is already open. Choose Private DNS with a tunnel on " +
-                    "demand, or the filtering tunnel, to use pause.",
-            )
-        }
+        // On a managed device VPN configuration is forbidden by policy, and that would refuse
+        // this tunnel too. Lifted first, because the consent check below reads it.
+        networkLockdown.allowOwnTunnel()
         if (needsVpnConsent()) return PauseOutcome.NeedsConsent
 
         // Written before it is applied, so a crash between the two leaves the device paused
         // rather than quietly connected.
         preferences.setInternetPaused(true)
 
-        val delivered = sendToTunnel(ChildSafetyVpnService.ACTION_PAUSE)
+        val delivered = startTunnel()
         if (!delivered) {
             preferences.setInternetPaused(false)
             return PauseOutcome.Failed("The filtering service could not be started.")
@@ -118,8 +110,8 @@ class InternetPauseController @Inject constructor(
             type = SafetyEventType.INTERNET_PAUSED,
             title = "Internet paused",
             detail = "A parent paused the internet on this device. Wi-Fi and mobile data are " +
-                "both covered because the pause is applied in the filtering tunnel underneath " +
-                "them. Apps that work offline keep working.",
+                "both covered because the pause is applied in a tunnel underneath them. Apps " +
+                "that work offline keep working.",
             severity = EventSeverity.INFO,
             action = EventAction.BLOCKED,
             capabilityId = CAPABILITY_ID,
@@ -127,15 +119,15 @@ class InternetPauseController @Inject constructor(
         return PauseOutcome.Paused
     }
 
-    /** Lifts the pause and returns the tunnel to filtering. */
+    /** Lifts the pause and takes the tunnel down; filtering carries on through Private DNS. */
     suspend fun resume() {
         preferences.setInternetPaused(false)
-        sendToTunnel(ChildSafetyVpnService.ACTION_RESUME)
+        PauseTunnelService.stop(context)
         notifier.clearInternetPausedNotice()
         eventRepository.record(
             type = SafetyEventType.INTERNET_PAUSED,
             title = "Internet resumed",
-            detail = "A parent lifted the pause. Filtering is back to normal.",
+            detail = "A parent lifted the pause. Filtering carries on through Private DNS.",
             severity = EventSeverity.INFO,
             action = EventAction.LOGGED,
             capabilityId = CAPABILITY_ID,
@@ -173,7 +165,8 @@ class InternetPauseController @Inject constructor(
                 )
                 return@launch
             }
-            sendToTunnel(ChildSafetyVpnService.ACTION_PAUSE)
+            networkLockdown.allowOwnTunnel()
+            startTunnel()
             notifier.postInternetPausedNotice()
         }
     }
@@ -187,18 +180,12 @@ class InternetPauseController @Inject constructor(
      * consent is gone, which is the one case only a parent can fix.
      */
     fun reapply(): Boolean {
+        networkLockdown.allowOwnTunnel()
         if (needsVpnConsent()) return false
-        return sendToTunnel(ChildSafetyVpnService.ACTION_PAUSE)
+        return startTunnel()
     }
 
-    private fun sendToTunnel(action: String): Boolean = runCatching {
-        val intent = Intent(context, ChildSafetyVpnService::class.java).setAction(action)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent)
-        } else {
-            context.startService(intent)
-        }
-    }.isSuccess
+    private fun startTunnel(): Boolean = runCatching { PauseTunnelService.start(context) }.isSuccess
 
     /** What happened when a parent asked for a pause, in terms the parent's screen can render. */
     sealed interface PauseOutcome {
